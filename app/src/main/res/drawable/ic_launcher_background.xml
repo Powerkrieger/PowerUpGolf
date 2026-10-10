@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#2E8B45" android:pathData="M0,0 h108 v108 h-108 Z" />
+    <!-- mowing stripes -->
+    <path android:fillColor="#37A052" android:pathData="M0,30 L30,0 L48,0 L0,48 Z" />
+    <path android:fillColor="#37A052" android:pathData="M0,66 L66,0 L84,0 L0,84 Z" />
+    <path android:fillColor="#37A052" android:pathData="M24,108 L108,24 L108,42 L42,108 Z" />
+</vector>
