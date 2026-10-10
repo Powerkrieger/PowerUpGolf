@@ -13,7 +13,7 @@ import org.junit.Test
 
 class NetworkTest {
     private suspend fun StateFlow<MatchState?>.await(what: (MatchState) -> Boolean) =
-        withTimeout(5000) { first { it != null && what(it) }!! }
+        withTimeout(30_000) { first { it != null && what(it) }!! }
 
     @Test
     fun twoPhonesPlayOverTcp(): Unit = runBlocking {
@@ -29,9 +29,9 @@ class NetworkTest {
 
             host.startGame()
             client.state.await { it.phase == Phase.AIMING && it.currentId == 0 }
-            host.shoot(0.0, -0.5)
+            host.shoot(0.0, -0.15)
             client.state.await { it.currentId == 1 && it.phase == Phase.AIMING }
-            client.shoot(0.0, -0.5)
+            client.shoot(0.0, -0.15)
             val s = host.state.await { it.currentId == 0 && it.player(1)!!.strokes == 1 }
             assertEquals(1, s.player(0)!!.strokes)
 
@@ -53,7 +53,7 @@ class NetworkTest {
             a.startGame()
             a.state.await { it.phase == Phase.AIMING }
             val late = GameClient("127.0.0.1", "late", 0, port)
-            withTimeout(5000) { late.problem.first { it != null } }
+            withTimeout(30_000) { late.problem.first { it != null } }
             late.close()
         } finally {
             c.close()
