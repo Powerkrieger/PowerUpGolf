@@ -40,7 +40,6 @@ import de.powerizzle.powerupgolf.game.MAX_PLAYERS
 import de.powerizzle.powerupgolf.game.MatchState
 import de.powerizzle.powerupgolf.game.PlayerState
 import de.powerizzle.powerupgolf.game.holePoints
-import de.powerizzle.powerupgolf.net.Discovery
 import de.powerizzle.powerupgolf.net.Session
 
 @Composable
@@ -54,9 +53,8 @@ fun PlayerDot(p: PlayerState, size: Int = 18) {
 }
 
 @Composable
-fun LobbyScreen(s: MatchState, session: Session, onLeave: () -> Unit) {
+fun LobbyScreen(s: MatchState, session: Session, onLeave: () -> Unit, hostPanel: (@Composable () -> Unit)?) {
     var showRules by remember { mutableStateOf(false) }
-    val addresses = remember { Discovery.localAddresses() }
     Column(
         Modifier
             .fillMaxSize()
@@ -66,16 +64,7 @@ fun LobbyScreen(s: MatchState, session: Session, onLeave: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("${s.hostName}'s game", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Color.White)
-        if (session.isHost) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Friends tap \"Join a game\" on the same Wi-Fi. If your game doesn't show up for them, they can type:")
-                    Spacer(Modifier.height(4.dp))
-                    addresses.forEach { Text(it, fontSize = 22.sp, fontWeight = FontWeight.Bold) }
-                    if (addresses.isEmpty()) Text("No network! Turn on Wi-Fi or your hotspot.", color = MaterialTheme.colorScheme.tertiary)
-                }
-            }
-        }
+        hostPanel?.invoke()
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Players ${s.players.size}/$MAX_PLAYERS", style = MaterialTheme.typography.titleMedium)

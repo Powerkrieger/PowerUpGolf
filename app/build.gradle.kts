@@ -64,6 +64,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(project(":powerlink"))
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

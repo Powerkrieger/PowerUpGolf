@@ -14,13 +14,17 @@ Party mini golf for 1–6 phones on the same Wi-Fi (or one phone's hotspot). No 
 - Course features: walls, bumpers, sand, water, ice, slopes, windmills, portal pairs, sliding jigsaw blades, boost pads.
 
 ## Networking
-The host phone runs the authoritative `Match` and physics. Joiners find it via UDP broadcast (port 47411)
-or by typing the IP shown in the lobby, then connect over TCP (port 47410). Messages are JSON lines;
-the host streams the full `MatchState` (~30 Hz while balls roll) and phones interpolate.
+Connections come from [PowerLink](https://github.com/Powerkrieger/PowerLink), a git submodule in `powerlink/`
+shared with the other games: Wi-Fi/hotspot, Bluetooth and Wi-Fi Direct, no Google services.
+Clone with `git clone --recursive`, or run `git submodule update --init` after cloning.
+Fix connection problems in PowerLink, then `git submodule update --remote powerlink` here.
+
+The host phone runs the authoritative `Match` and physics. Messages are JSON lines; the host streams the
+full `MatchState` (~30 Hz while balls roll) and phones interpolate.
 
 ## Code
 - `game/` – pure Kotlin, no Android: `Levels` (add holes here), `Physics`, `Match` (rules), `PowerUp`.
-- `net/` – `GameHost`, `GameClient`, `Discovery`.
+- `net/` – `GameHost`, `GameClient` (on top of PowerLink `Link`s), the wire protocol.
 - `ui/` – Compose screens and the `CourseRenderer` canvas.
 
 Tests (`./gradlew :app:testDebugUnitTest`) include a brute-force bot that checks every hole can be finished

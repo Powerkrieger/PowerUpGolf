@@ -2,7 +2,6 @@ package de.powerizzle.powerupgolf.ui
 
 import android.app.Application
 import android.content.Context
-import android.net.wifi.WifiManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -10,7 +9,9 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import de.powerizzle.powerupgolf.game.PLAYER_COLORS
-import de.powerizzle.powerupgolf.net.Discovery
+import de.powerizzle.powerlink.Link
+import de.powerizzle.powerlink.PowerLink
+import de.powerizzle.powerupgolf.net.LINK_CONFIG
 import de.powerizzle.powerupgolf.net.GameClient
 import de.powerizzle.powerupgolf.net.GameHost
 import de.powerizzle.powerupgolf.net.Session
@@ -20,20 +21,23 @@ enum class Screen { HOME, JOIN, GAME }
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("profile", Context.MODE_PRIVATE)
 
-    // Many phones drop broadcast packets to save battery unless an app holds this lock.
-    private val multicastLock = (app.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
-        .createMulticastLock("powerupgolf").apply { setReferenceCounted(false) }
+    val powerLink = PowerLink(app, LINK_CONFIG)
 
     var name by mutableStateOf(prefs.getString("name", "") ?: "")
         private set
-    var color by mutableLongStateOf(prefs.getLong("color", PLAYER_COLORS.random().also { c -> prefs.edit { putLong("color", c) } }))
+    // Pick a random colour once; the default argument must not be evaluated (and saved) on every start.
+    var color by mutableLongStateOf(
+        if (prefs.contains("color")) prefs.getLong("color", PLAYER_COLORS[0])
+        else PLAYER_COLORS.random().also { c -> prefs.edit { putLong("color", c) } }
+    )
         private set
     var screen by mutableStateOf(Screen.HOME)
         private set
     var session by mutableStateOf<Session?>(null)
         private set
-
-    val foundHosts = Discovery.scan()
+    /** While hosting: PowerLink's listeners on every medium, for the lobby's "join via" panel. */
+    var linkHost by mutableStateOf<PowerLink.LinkHost?>(null)
+        private set
 
     fun updateName(n: String) {
         name = n.take(14)
@@ -46,25 +50,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun host() {
-        multicastLock.acquire()
-        session = GameHost(name, color)
+        val h = powerLink.host(name)
+        linkHost = h
+        session = GameHost(name, color, h.guests, advertise = h::update, onClose = h::close)
         screen = Screen.GAME
     }
 
     fun openJoin() {
-        multicastLock.acquire()
         screen = Screen.JOIN
     }
 
-    fun join(address: String) {
-        session = GameClient(address, name, color)
+    fun joined(link: Link) {
+        session = GameClient(link, name, color)
         screen = Screen.GAME
     }
 
     fun backToMenu() {
         session?.close()
         session = null
-        if (multicastLock.isHeld) multicastLock.release()
+        linkHost = null
         screen = Screen.HOME
     }
 

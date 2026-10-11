@@ -24,3 +24,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "PowerUpGolf"
 include(":app")
+
+// Shared local multiplayer (git submodule, see powerlink/README.md).
+include(":powerlink")

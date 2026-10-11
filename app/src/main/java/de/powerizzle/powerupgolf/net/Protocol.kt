@@ -4,10 +4,19 @@ import de.powerizzle.powerupgolf.game.MatchState
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import de.powerizzle.powerlink.LinkConfig
+import java.util.UUID
 
 /** Bump when messages change incompatibly; the host turns away players with another version. */
-const val PROTOCOL_VERSION = 1
-const val GAME_PORT = 47410
+const val PROTOCOL_VERSION = 2
+
+/** How PowerLink finds and connects PowerUp Golf phones. Never change these, old and new versions must agree. */
+val LINK_CONFIG = LinkConfig(
+    app = "powerupgolf",
+    tcpPort = 47410,
+    discoveryPort = 47411,
+    bluetoothUuid = UUID.fromString("9f1c2e4a-7b3d-4c8e-a5f6-2d0b8e9c1a37"),
+)
 
 /** Player phone → host. Each message is one line of JSON. */
 @Serializable

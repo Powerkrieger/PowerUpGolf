@@ -261,7 +261,7 @@ private fun TopBar(s: MatchState, myTurn: Boolean, onRules: () -> Unit, onLeave:
     Row(
         Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(60.dp)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

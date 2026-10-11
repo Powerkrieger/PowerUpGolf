@@ -54,7 +54,8 @@ import de.powerizzle.powerupgolf.game.MAX_STROKES
 import de.powerizzle.powerupgolf.game.PLAYER_COLORS
 import de.powerizzle.powerupgolf.game.Phase
 import de.powerizzle.powerupgolf.game.PowerUp
-import de.powerizzle.powerupgolf.net.Discovery
+import de.powerizzle.powerlink.ui.HostPanel
+import de.powerizzle.powerlink.ui.JoinPanel
 import de.powerizzle.powerupgolf.net.Session
 
 @Composable
@@ -67,7 +68,10 @@ fun PowerUpGolfApp(vm: AppViewModel = viewModel()) {
         when (vm.screen) {
             Screen.HOME -> HomeScreen(vm)
             Screen.JOIN -> JoinScreen(vm)
-            Screen.GAME -> vm.session?.let { GameRoot(it, onLeave = vm::backToMenu) }
+            Screen.GAME -> vm.session?.let { session ->
+                val host = vm.linkHost
+                GameRoot(session, onLeave = vm::backToMenu, hostPanel = host?.let { h -> { HostPanel(vm.powerLink, h, Modifier.fillMaxWidth()) } })
+            }
         }
     }
 }
@@ -120,7 +124,7 @@ private fun HomeScreen(vm: AppViewModel) {
             Text("Join a game", fontSize = 18.sp)
         }
         Text(
-            "All phones need to be on the same Wi-Fi, or connected to the host's hotspot.",
+            "Play over the same Wi-Fi, a phone's hotspot, Bluetooth or Wi-Fi Direct.",
             color = Color.White,
             textAlign = TextAlign.Center,
         )
@@ -155,75 +159,25 @@ fun RulesDialog(onDismiss: () -> Unit) {
 @Composable
 private fun JoinScreen(vm: AppViewModel) {
     BackHandler(onBack = vm::backToMenu)
-    val hosts by vm.foundHosts.collectAsStateWithLifecycle(emptyList())
-    var address by rememberSaveable { mutableStateOf("") }
     Column(
         Modifier
             .fillMaxSize()
             .safeDrawingPadding()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Join a game", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Color.White)
-        Card(Modifier.fillMaxWidth().weight(1f)) {
-            Column(Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Games nearby", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                }
-                Spacer(Modifier.height(8.dp))
-                if (hosts.isEmpty()) {
-                    Text("Searching… Ask the host to open \"Host a game\". Make sure you're on the same Wi-Fi.")
-                }
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(hosts, key = { it.address }) { h -> FoundHostRow(h) { vm.join(h.address) } }
-                }
-            }
-        }
         Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Not showing up? Type the address shown on the host's lobby screen:")
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = address,
-                        onValueChange = { address = it.trim() },
-                        label = { Text("e.g. 192.168.1.23") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Button(onClick = { vm.join(address) }, enabled = address.isNotBlank()) { Text("Join") }
-                }
-            }
+            JoinPanel(vm.powerLink, onJoined = { link, _ -> vm.joined(link) }, Modifier.padding(16.dp))
         }
         OutlinedButton(onClick = vm::backToMenu, modifier = Modifier.fillMaxWidth()) { Text("Back", color = Color.White) }
     }
 }
 
-@Composable
-private fun FoundHostRow(h: Discovery.FoundHost, onJoin: () -> Unit) {
-    val open = h.beacon.open && h.beacon.players < MAX_PLAYERS
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
-            .clickable(enabled = open, onClick = onJoin)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("${h.beacon.name}'s game", fontWeight = FontWeight.Bold)
-            Text("${h.beacon.players}/$MAX_PLAYERS players · ${h.address}", fontSize = 12.sp)
-        }
-        Text(if (open) "Join ›" else "Running", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-    }
-}
-
 /** Everything after hosting/joining: lobby, the course, the final ranking. */
 @Composable
-private fun GameRoot(session: Session, onLeave: () -> Unit) {
+private fun GameRoot(session: Session, onLeave: () -> Unit, hostPanel: (@Composable () -> Unit)?) {
     val state by session.state.collectAsStateWithLifecycle()
     val myId by session.myId.collectAsStateWithLifecycle()
     val problem by session.problem.collectAsStateWithLifecycle()
@@ -239,7 +193,7 @@ private fun GameRoot(session: Session, onLeave: () -> Unit) {
                 Text("Connecting…", color = Color.White)
             }
         }
-        s.phase == Phase.LOBBY -> LobbyScreen(s, session, onLeave = { confirmLeave = true })
+        s.phase == Phase.LOBBY -> LobbyScreen(s, session, onLeave = { confirmLeave = true }, hostPanel = hostPanel)
         s.phase == Phase.GAME_OVER -> FinalScreen(s, myId, onLeave)
         else -> GameScreen(s, myId, session, onLeave = { confirmLeave = true })
     }

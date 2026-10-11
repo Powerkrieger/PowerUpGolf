@@ -1,7 +1,9 @@
 package de.powerizzle.powerupgolf.net
 
+import de.powerizzle.powerlink.Link
 import de.powerizzle.powerupgolf.game.HOST_ID
 import de.powerizzle.powerupgolf.game.Intent
+import de.powerizzle.powerupgolf.game.MAX_PLAYERS
 import de.powerizzle.powerupgolf.game.Match
 import de.powerizzle.powerupgolf.game.MatchState
 import de.powerizzle.powerupgolf.game.Phase
@@ -9,18 +11,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 /** One phone's view of a game, whether it hosts it or joined it. The UI only talks to this. */
@@ -39,16 +41,22 @@ interface Session {
 }
 
 /**
- * Hosting: runs the authoritative [Match], accepts players over TCP and answers discovery broadcasts.
- * All [Match] access happens on [loop], a single-threaded view of the default dispatcher.
+ * Hosting: runs the authoritative [Match] and serves every guest that PowerLink hands over in [guests].
+ * [advertise] tells finders how full the game is. All [Match] access happens on [loop], a single-threaded
+ * view of the default dispatcher.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class GameHost(hostName: String, color: Long, private val port: Int = GAME_PORT, private val discoverable: Boolean = true) : Session {
+class GameHost(
+    hostName: String,
+    color: Long,
+    guests: Flow<Link>,
+    private val advertise: (info: String, open: Boolean) -> Unit = { _, _ -> },
+    private val onClose: () -> Unit = {},
+) : Session {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val loop = Dispatchers.Default.limitedParallelism(1)
     private val match = Match(hostName)
     private val clients = ConcurrentHashMap<Int, Channel<String>>()
-    private var server: ServerSocket? = null
 
     override val isHost = true
     override val myId = MutableStateFlow(HOST_ID)
@@ -60,19 +68,12 @@ class GameHost(hostName: String, color: Long, private val port: Int = GAME_PORT,
         val now = System.currentTimeMillis()
         state.value = match.snapshot(now)
         scope.launch(loop) { gameLoop() }
-        scope.launch { acceptLoop() }
-        if (discoverable) scope.launch {
-            runCatching {
-                Discovery.respond {
-                    val s = state.value
-                    Discovery.Beacon(hostName, s?.players?.size ?: 0, s?.phase == Phase.LOBBY)
-                }
-            }
-        }
+        scope.launch { guests.collect { link -> scope.launch { serve(link) } } }
     }
 
     private suspend fun gameLoop() {
         var frame = 0L
+        var advertised: Pair<String, Boolean>? = null
         while (scope.isActive) {
             val now = System.currentTimeMillis()
             match.tick(now)
@@ -85,38 +86,20 @@ class GameHost(hostName: String, color: Long, private val port: Int = GAME_PORT,
                     for (c in clients.values) c.trySend(line)
                 }
             }
+            val ad = "${snap.players.size}/$MAX_PLAYERS players" to (snap.phase == Phase.LOBBY && snap.players.size < MAX_PLAYERS)
+            if (ad != advertised) {
+                advertised = ad
+                advertise(ad.first, ad.second)
+            }
             frame++
             delay(16)
-        }
-    }
-
-    private suspend fun acceptLoop() {
-        val s = try {
-            ServerSocket().apply {
-                reuseAddress = true
-                bind(InetSocketAddress(port))
-            }
-        } catch (e: Exception) {
-            problem.value = "Can't open port $port: ${e.message}"
-            return
-        }
-        server = s
-        try {
-            while (scope.isActive) {
-                val socket = cancellableBlocking({ s.close() }) { s.accept() }
-                scope.launch { serve(Link(socket)) }
-            }
-        } catch (_: Exception) {
-            // server closed
-        } finally {
-            s.close()
         }
     }
 
     private suspend fun serve(link: Link) {
         var id: Int? = null
         try {
-            val hello = withContext(Dispatchers.IO) { link.readLine() }
+            val hello = withTimeoutOrNull(10_000) { link.receive() }
                 ?.let { runCatching { wireJson.decodeFromString(ClientMsg.serializer(), it) }.getOrNull() } as? ClientMsg.Hello
                 ?: return
             if (hello.version != PROTOCOL_VERSION) {
@@ -129,21 +112,17 @@ class GameHost(hostName: String, color: Long, private val port: Int = GAME_PORT,
                 return
             }
             val playerId: Int = id
-            withContext(Dispatchers.IO) { link.sendLine(wireJson.encodeToString(HostMsg.serializer(), HostMsg.Welcome(playerId))) }
+            link.send(wireJson.encodeToString(HostMsg.serializer(), HostMsg.Welcome(playerId)))
             // Only the newest state matters, so a slow phone simply skips frames.
             val outbox = Channel<String>(Channel.CONFLATED)
             clients[playerId] = outbox
             state.value?.let { outbox.trySend(wireJson.encodeToString(HostMsg.serializer(), HostMsg.State(it))) }
-            val writer: Job = scope.launch(Dispatchers.IO) {
-                try {
-                    for (line in outbox) link.sendLine(line)
-                } catch (_: Exception) {
-                    link.close()
-                }
+            val writer: Job = scope.launch {
+                for (line in outbox) if (!link.send(line)) break
             }
             try {
                 while (true) {
-                    val line = cancellableBlocking({ link.close() }) { link.readLine() } ?: break
+                    val line = link.receive() ?: break
                     val msg = runCatching { wireJson.decodeFromString(ClientMsg.serializer(), line) }.getOrNull() ?: continue
                     val intent = when (msg) {
                         is ClientMsg.Shoot -> Intent.Shoot(playerId, msg.dx, msg.dy)
@@ -155,19 +134,17 @@ class GameHost(hostName: String, color: Long, private val port: Int = GAME_PORT,
             } finally {
                 writer.cancel()
             }
-        } catch (_: Exception) {
-            // connection broke
         } finally {
             link.close()
             id?.let {
                 clients.remove(it)?.close()
-                act(Intent.Leave(it))
+                withContext(NonCancellable) { act(Intent.Leave(it)) }
             }
         }
     }
 
-    private suspend fun reject(link: Link, reason: String) = withContext(Dispatchers.IO) {
-        runCatching { link.sendLine(wireJson.encodeToString(HostMsg.serializer(), HostMsg.Rejected(reason))) }
+    private suspend fun reject(link: Link, reason: String) {
+        link.send(wireJson.encodeToString(HostMsg.serializer(), HostMsg.Rejected(reason)))
     }
 
     private suspend fun act(intent: Intent) = withContext(loop) {
@@ -184,15 +161,14 @@ class GameHost(hostName: String, color: Long, private val port: Int = GAME_PORT,
 
     override fun close() {
         scope.cancel()
-        runCatching { server?.close() }
         clients.values.forEach { it.close() }
+        onClose()
     }
 }
 
-/** Joining: forwards our intents to the host and mirrors the state it sends back. */
-class GameClient(private val address: String, name: String, color: Long, private val port: Int = GAME_PORT) : Session {
+/** Joining: forwards our intents to the host over [link] and mirrors the state it sends back. */
+class GameClient(private val link: Link, name: String, color: Long) : Session {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var link: Link? = null
 
     override val isHost = false
     override val myId = MutableStateFlow(-1)
@@ -201,14 +177,13 @@ class GameClient(private val address: String, name: String, color: Long, private
 
     init {
         scope.launch {
-            val socket = Socket()
             try {
-                cancellableBlocking({ socket.close() }) { socket.connect(InetSocketAddress(address.trim(), port), 5000) }
-                val l = Link(socket)
-                link = l
-                l.sendLine(wireJson.encodeToString(ClientMsg.serializer(), ClientMsg.Hello(name, color, PROTOCOL_VERSION)))
+                if (!link.send(wireJson.encodeToString(ClientMsg.serializer(), ClientMsg.Hello(name, color, PROTOCOL_VERSION)))) {
+                    problem.value = "Connection lost."
+                    return@launch
+                }
                 while (true) {
-                    val line = cancellableBlocking({ l.close() }) { l.readLine() } ?: break
+                    val line = link.receive() ?: break
                     when (val msg = runCatching { wireJson.decodeFromString(HostMsg.serializer(), line) }.getOrNull()) {
                         is HostMsg.Welcome -> myId.value = msg.playerId
                         is HostMsg.State -> state.value = msg.state
@@ -219,18 +194,15 @@ class GameClient(private val address: String, name: String, color: Long, private
                         null -> {}
                     }
                 }
-                if (state.value?.phase != Phase.GAME_OVER) problem.value = "The host ended the game."
-            } catch (e: Exception) {
-                if (isActive) problem.value = "Connection lost: ${e.message ?: e.javaClass.simpleName}"
+                if (state.value?.phase != Phase.GAME_OVER) problem.value = "Lost the connection to the host."
             } finally {
-                socket.close()
+                link.close()
             }
         }
     }
 
     private fun send(msg: ClientMsg) {
-        val l = link ?: return
-        scope.launch { runCatching { l.sendLine(wireJson.encodeToString(ClientMsg.serializer(), msg)) } }
+        scope.launch { link.send(wireJson.encodeToString(ClientMsg.serializer(), msg)) }
     }
 
     override fun startGame() {}
@@ -239,6 +211,6 @@ class GameClient(private val address: String, name: String, color: Long, private
 
     override fun close() {
         scope.cancel()
-        link?.close()
+        link.close()
     }
 }
