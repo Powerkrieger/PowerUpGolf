@@ -82,5 +82,95 @@ object Levels {
         funnel = 8.0,
     )
 
-    val all: List<Level> = listOf(warmUp, dogleg, pond, switchback, gauntlet)
+    private val portalHop = Level(
+        name = "Portal Hop",
+        description = "No way through the wall. Pick a portal: the safe one, or the one behind the saw.",
+        outline = listOf(v(18, 10), v(82, 10), v(90, 18), v(90, 142), v(82, 150), v(18, 150), v(10, 142), v(10, 18)),
+        tee = v(50, 138),
+        cup = v(38, 28),
+        walls = listOf(Wall(v(10, 100), v(90, 100))),
+        portals = listOf(Portal(v(20, 112), v(22, 86)), Portal(v(80, 112), v(64, 42))),
+        sliders = listOf(
+            Slider(v(68, 112), v(68, 132), half = 6.0, period = 2.6),
+            Slider(v(70, 64), v(84, 64), half = 6.0, period = 3.0),
+        ),
+        bumpers = listOf(Bumper(v(50, 116), 3.0), Bumper(v(38, 44), 2.5)),
+        zones = listOf(
+            Zone(Terrain.WATER, rect(10, 56, 64, 70)),
+            Zone(Terrain.SAND, rect(70, 18, 88, 34)),
+        ),
+        boxes = listOf(v(30, 124), v(78, 84), v(20, 30)),
+    )
+
+    private val jigsawAlley = Level(
+        name = "Jigsaw Alley",
+        description = "Right, up, left, up, right. Time your run past the saws.",
+        outline = rect(10, 10, 90, 150),
+        tee = v(24, 127),
+        teeSpread = v(0, 1),
+        cup = v(78, 32),
+        walls = listOf(Wall(v(10, 104), v(70, 104)), Wall(v(30, 58), v(90, 58))),
+        sliders = listOf(
+            Slider(v(46, 117), v(46, 137), half = 11.0, period = 2.8),
+            Slider(v(62, 137), v(62, 117), half = 11.0, period = 2.8),
+        ),
+        windmills = listOf(Windmill(v(46, 81), length = 12.0, arms = 2, speed = 1.6)),
+        boosters = listOf(Booster(v(80, 90), v(0, -1)), Booster(v(20, 66), v(0, -1))),
+        zones = listOf(
+            Zone(Terrain.WATER, rect(76, 136, 90, 150)),
+            Zone(Terrain.ICE, rect(30, 14, 64, 54)),
+        ),
+        bumpers = listOf(Bumper(v(68, 22), 2.5), Bumper(v(68, 44), 2.5)),
+        boxes = listOf(v(34, 112), v(80, 120), v(62, 94), v(20, 30)),
+    )
+
+    private val spiral = Level(
+        name = "Spiral",
+        description = "Wind your way into the middle. The orange portal skips a lap, if you get past the saw.",
+        outline = rect(10, 10, 90, 150),
+        tee = v(50, 142),
+        cup = v(50, 60),
+        walls = listOf(
+            Wall(v(26, 44), v(26, 134)), Wall(v(26, 134), v(74, 134)), Wall(v(74, 134), v(74, 26)), Wall(v(74, 26), v(44, 26)),
+            Wall(v(42, 42), v(58, 42)), Wall(v(42, 42), v(42, 118)), Wall(v(42, 118), v(58, 118)), Wall(v(58, 42), v(58, 100)),
+        ),
+        portals = listOf(Portal(v(83, 142), v(66, 56))),
+        sliders = listOf(Slider(v(74, 138.5), v(74, 145.5), half = 4.0, period = 2.2)),
+        slopes = listOf(Slope(rect(42, 68, 58, 118), v(0, -22))),
+        boosters = listOf(Booster(v(18, 96), v(0, -1)), Booster(v(66, 84), v(0, 1))),
+        zones = listOf(
+            Zone(Terrain.WATER, rect(80, 60, 90, 100)),
+            Zone(Terrain.SAND, rect(44, 28, 56, 40)),
+        ),
+        boxes = listOf(v(18, 120), v(34, 80), v(82, 30), v(50, 126)),
+    )
+
+    private val finale = Level(
+        name = "Grand Finale",
+        description = "Saw, bridge, windmill, fortress. Or take the portal and pray.",
+        outline = listOf(v(18, 10), v(82, 10), v(90, 18), v(90, 142), v(82, 150), v(18, 150), v(10, 142), v(10, 18)),
+        tee = v(50, 140),
+        cup = v(50, 26),
+        walls = listOf(
+            Wall(v(36, 16), v(36, 40)), Wall(v(64, 16), v(64, 40)), Wall(v(36, 40), v(45, 40)), Wall(v(55, 40), v(64, 40)),
+        ),
+        portals = listOf(Portal(v(16, 124), v(80, 24))),
+        sliders = listOf(
+            Slider(v(40, 122), v(60, 122), half = 5.0, period = 2.4),
+            Slider(v(42, 46), v(58, 46), half = 4.0, period = 2.0, phase = 1.0),
+        ),
+        boosters = listOf(Booster(v(50, 105), v(0, -1))),
+        windmills = listOf(Windmill(v(50, 74), length = 13.0, arms = 4, speed = 1.2)),
+        bumpers = listOf(Bumper(v(22, 74), 3.0), Bumper(v(78, 74), 3.0), Bumper(v(16, 132), 2.5)),
+        zones = listOf(
+            Zone(Terrain.WATER, rect(10, 96, 44, 114)),
+            Zone(Terrain.WATER, rect(56, 96, 90, 114)),
+            Zone(Terrain.SAND, rect(12, 50, 28, 62)),
+            Zone(Terrain.ICE, rect(66, 12, 88, 46)),
+        ),
+        boxes = listOf(v(76, 128), v(24, 86), v(76, 56), v(24, 30)),
+        funnel = 8.0,
+    )
+
+    val all: List<Level> = listOf(warmUp, dogleg, pond, switchback, gauntlet, portalHop, jigsawAlley, spiral, finale)
 }

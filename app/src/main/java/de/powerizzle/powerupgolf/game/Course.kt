@@ -1,6 +1,7 @@
 package de.powerizzle.powerupgolf.game
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -25,6 +26,32 @@ data class Windmill(val c: Vec2, val length: Double, val arms: Int, val speed: D
     }
 }
 
+/** Two linked rings. A rolling ball that drops into either end pops out of the other with the same velocity. */
+data class Portal(val a: Vec2, val b: Vec2)
+
+/**
+ * A jigsaw blade: a bar of length 2×[half] lying on the line [a]–[b] whose centre saws back and forth
+ * between a and b once every [period] seconds. Like windmills, its position is a function of simulation time.
+ */
+data class Slider(val a: Vec2, val b: Vec2, val half: Double, val period: Double, val phase: Double = 0.0) {
+    private fun angle(time: Double) = 2 * PI * time / period + phase
+
+    fun center(time: Double): Vec2 = a + (b - a) * (0.5 - 0.5 * cos(angle(time)))
+
+    fun velocity(time: Double): Vec2 = (b - a) * (PI / period * sin(angle(time)))
+
+    fun ends(time: Double): Pair<Vec2, Vec2> {
+        val c = center(time)
+        val d = (b - a).norm() * half
+        return (c - d) to (c + d)
+    }
+}
+
+/** A square speed pad of half-size [half] that keeps accelerating balls towards [dir]. */
+data class Booster(val c: Vec2, val dir: Vec2, val half: Double = 4.0) {
+    fun contains(p: Vec2) = abs(p.x - c.x) < half && abs(p.y - c.y) < half
+}
+
 /**
  * One hole. The [outline] polygon is the playable fairway, its edges are walls.
  * The cup sits in a funnel (radius [funnel]) that pulls slow balls in, so near-misses still drop.
@@ -40,6 +67,9 @@ data class Level(
     val zones: List<Zone> = emptyList(),
     val slopes: List<Slope> = emptyList(),
     val windmills: List<Windmill> = emptyList(),
+    val portals: List<Portal> = emptyList(),
+    val sliders: List<Slider> = emptyList(),
+    val boosters: List<Booster> = emptyList(),
     val boxes: List<Vec2> = emptyList(),
     val funnel: Double = 7.0,
     /** Direction the tee row is laid out in (players stand side by side along it). */
@@ -63,3 +93,5 @@ data class Level(
 
 const val WALL_HALF_WIDTH = 0.8
 const val TEE_SPACING = 4.6
+const val PORTAL_R = 3.0
+const val SLIDER_HALF_WIDTH = 1.3

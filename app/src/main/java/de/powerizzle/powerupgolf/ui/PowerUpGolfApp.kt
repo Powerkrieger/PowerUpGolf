@@ -138,13 +138,15 @@ fun RulesDialog(onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("• Everyone plays the same hole at the same time. Take turns, one stroke each.")
-                Text("• Drag back anywhere on the course and let go to shoot, like a slingshot.")
+                Text("• Shoot with the pad at the bottom: pull away from the ball like a slingshot and let go. The farther out, the harder. Let go on the ball to cancel.")
                 Text("• You have $MAX_STROKES strokes per hole. The best scorer of the last hole goes first.")
                 Text("• Hole in one: 500. Two strokes: 400, three: 300 … not holed: 0.")
                 Text("• Bump other balls: +25. Knock someone into the water: +50. Sabotage with power-ups: +30 or more.")
                 Text("• Roll over 🎁 boxes to collect power-ups (max 2). Use one per turn before you shoot:")
                 PowerUp.entries.forEach { Text("   ${it.icon} ${it.label}: ${it.help}", fontSize = 13.sp) }
                 Text("• The cup sits in a dip: slow balls nearby roll in on their own.")
+                Text("• Portals come in pairs: roll into one, come out of the other at the same speed.")
+                Text("• Saw blades slide back and forth, orange pads speed you up in the arrow's direction.")
             }
         },
     )

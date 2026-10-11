@@ -1,6 +1,13 @@
 package de.powerizzle.powerupgolf.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,7 +41,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -45,7 +54,6 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import de.powerizzle.powerupgolf.game.BallState
 import de.powerizzle.powerupgolf.game.INVENTORY_SIZE
@@ -56,6 +64,8 @@ import de.powerizzle.powerupgolf.game.PlayerState
 import de.powerizzle.powerupgolf.game.Targeting
 import de.powerizzle.powerupgolf.game.Vec2
 import de.powerizzle.powerupgolf.net.Session
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 /**
  * Keeps the previous and current state so balls glide smoothly between network updates
@@ -106,8 +116,8 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
     val me = s.player(myId)
     val myTurn = s.phase == Phase.AIMING && s.currentId == myId
     var selectedSlot by remember { mutableStateOf<Int?>(null) }
-    var dragStart by remember { mutableStateOf<Offset?>(null) }
-    var dragNow by remember { mutableStateOf(Offset.Zero) }
+    /** The shot being dialled in on the pad: direction × power (0..1), or null. */
+    var aim by remember { mutableStateOf<Vec2?>(null) }
     var showRules by remember { mutableStateOf(false) }
     val smoother = remember { Smoother() }
     smoother.push(s, System.nanoTime())
@@ -118,7 +128,7 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
     }
     LaunchedEffect(myTurn, s.usedPowerThisTurn) {
         selectedSlot = null
-        dragStart = null
+        aim = null
     }
 
     // Redraw every frame for animation and smoothing.
@@ -128,120 +138,137 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
     val tm = rememberTextMeasurer()
     val current by rememberUpdatedState(s)
 
+    // Every bar has a fixed height, so the course never gets resized (and re-scaled) while playing.
     Column(
         Modifier
             .fillMaxSize()
             .background(DeepGreen)
             .safeDrawingPadding()
     ) {
-        TopBar(s, myId, myTurn, onRules = { showRules = true }, onLeave = onLeave)
+        TopBar(s, myTurn, onRules = { showRules = true }, onLeave = onLeave)
         Scoreboard(s)
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            var view by remember { mutableStateOf<CourseView?>(null) }
+            // Plain holder rather than state: it is updated while drawing and must not trigger recomposition.
+            val view = remember { arrayOfNulls<CourseView>(1) }
             Canvas(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(myTurn, selectedSlot) {
                         val slot = selectedSlot
-                        if (myTurn && slot != null) {
-                            detectTapGestures { off ->
-                                val st = current
-                                val power = st.player(myId)?.inventory?.getOrNull(slot) ?: return@detectTapGestures
-                                val w = view?.world(off) ?: return@detectTapGestures
-                                when (power.targeting) {
-                                    Targeting.OPPONENT -> {
-                                        val victim = st.players
-                                            .filter { it.id != myId && it.ball != null && !it.done }
-                                            .minByOrNull { Vec2(it.ball!!.x, it.ball.y).dist(w) }
-                                        if (victim != null && Vec2(victim.ball!!.x, victim.ball.y).dist(w) < 8) {
-                                            session.usePower(slot, victim.id, null, null)
-                                        }
+                        if (!myTurn || slot == null) return@pointerInput
+                        detectTapGestures { off ->
+                            val st = current
+                            val power = st.player(myId)?.inventory?.getOrNull(slot) ?: return@detectTapGestures
+                            val w = view[0]?.world(off) ?: return@detectTapGestures
+                            when (power.targeting) {
+                                Targeting.OPPONENT -> {
+                                    val victim = st.players
+                                        .filter { it.id != myId && it.ball != null && !it.done }
+                                        .minByOrNull { Vec2(it.ball!!.x, it.ball.y).dist(w) }
+                                    if (victim != null && Vec2(victim.ball!!.x, victim.ball.y).dist(w) < 8) {
+                                        session.usePower(slot, victim.id, null, null)
                                     }
-                                    Targeting.PLACE -> session.usePower(slot, null, w.x, w.y)
-                                    else -> {}
                                 }
-                                selectedSlot = null
+                                Targeting.PLACE -> session.usePower(slot, null, w.x, w.y)
+                                else -> {}
                             }
-                        } else if (myTurn) {
-                            detectDragGestures(
-                                onDragStart = { dragStart = it; dragNow = it },
-                                onDrag = { change, _ -> dragNow = change.position },
-                                onDragCancel = { dragStart = null },
-                                onDragEnd = {
-                                    val start = dragStart
-                                    dragStart = null
-                                    if (start != null) {
-                                        val shot = shotFrom(start, dragNow, size.width.toFloat())
-                                        if (shot != null) session.shoot(shot.x, shot.y)
-                                    }
-                                },
-                            )
+                            selectedSlot = null
                         }
                     }
             ) {
                 frame // read so the canvas redraws each frame
-                val v = CourseView.fit(size, s.level).also { view = it }
+                val v = CourseView.fit(size, s.level).also { view[0] = it }
                 val now = System.nanoTime()
                 val balls = smoother.balls(now)
                 drawCourse(v, s, balls, smoother.simTime(now), (now / 1_000_000L % 1_000_000L) / 1000f, tm)
-                // Aim line
-                val start = dragStart
+                val shot = aim
                 val myBall = balls[myId]
-                if (start != null && myBall != null && myTurn) {
-                    val shot = shotFrom(start, dragNow, size.width)
-                    if (shot != null) {
-                        val from = v.p(myBall.x, myBall.y)
-                        val power = shot.len()
-                        val reach = shot * (45.0 * if (me?.forceUp == true) 1.8 else 1.0)
-                        val col = lerp(Color.White, Color(0xFFFF1744), power.toFloat())
-                        drawLine(
-                            col, from, from + Offset(v.d(reach.x), v.d(reach.y)), v.d(0.7), StrokeCap.Round,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(v.d(1.5), v.d(1.2))),
-                        )
-                        drawCircle(col, v.d(1.0), from + Offset(v.d(reach.x), v.d(reach.y)))
-                        // Power meter along the bottom
-                        drawRect(Color(0x66000000), Offset(0f, size.height - 18f), androidx.compose.ui.geometry.Size(size.width, 18f))
-                        drawRect(col, Offset(0f, size.height - 18f), androidx.compose.ui.geometry.Size(size.width * power.toFloat(), 18f))
-                    }
-                }
+                if (shot != null && myBall != null && myTurn) drawAimArrow(v, myBall, shot)
             }
+            FeedToast(s, Modifier.align(Alignment.TopCenter).padding(top = 6.dp, start = 12.dp, end = 12.dp))
             if (s.phase == Phase.HOLE_DONE) {
                 HoleResults(s, Modifier.align(Alignment.Center).padding(16.dp).fillMaxWidth())
             }
         }
-        BottomBar(s, me, myTurn, selectedSlot, onSlot = { i ->
-            val power = me?.inventory?.getOrNull(i) ?: return@BottomBar
-            when (power.targeting) {
-                Targeting.SELF, Targeting.ALL_OPPONENTS -> session.usePower(i, null, null, null)
-                else -> selectedSlot = if (selectedSlot == i) null else i
-            }
-        })
+        BottomPanel(
+            s, me, myTurn, selectedSlot, aim,
+            onSlot = { i ->
+                val power = me?.inventory?.getOrNull(i) ?: return@BottomPanel
+                when (power.targeting) {
+                    Targeting.SELF, Targeting.ALL_OPPONENTS -> session.usePower(i, null, null, null)
+                    else -> selectedSlot = if (selectedSlot == i) null else i
+                }
+            },
+            onAim = { aim = it },
+            onShoot = { session.shoot(it.x, it.y) },
+        )
     }
     if (showRules) RulesDialog { showRules = false }
 }
 
-/** Slingshot: pulling back from [start] to [now] shoots the other way. Returns direction × power (0..1), or null if too short. */
-private fun shotFrom(start: Offset, now: Offset, width: Float): Vec2? {
-    val pull = start - now
-    val len = pull.getDistance()
-    val power = (len / (width * 0.45f)).coerceAtMost(1f)
-    if (power < 0.04f) return null
-    return Vec2((pull.x / len * power).toDouble(), (pull.y / len * power).toDouble())
+/** Green for a soft putt, through yellow, to red for full power. */
+private fun powerColor(power: Float): Color =
+    if (power < 0.5f) lerp(Color(0xFF66BB6A), Color(0xFFFFEB3B), power * 2) else lerp(Color(0xFFFFEB3B), Color(0xFFFF1744), (power - 0.5f) * 2)
+
+/** A short arrow next to the ball: its size and colour show the power, its direction the shot. */
+private fun DrawScope.drawAimArrow(v: CourseView, ball: BallState, shot: Vec2) {
+    val power = shot.len().toFloat()
+    val dir = shot.norm()
+    val side = dir.perp()
+    val start = Vec2(ball.x, ball.y) + dir * (ball.r + 0.8)
+    val length = 2.5 + 5.0 * power
+    val head = 1.2 + 1.3 * power
+    val tip = start + dir * length
+    val col = powerColor(power)
+    drawLine(Color(0x55000000), v.p(start) + Offset(v.d(0.3), v.d(0.4)), v.p(tip - dir * head) + Offset(v.d(0.3), v.d(0.4)), v.d(0.6 + 0.5 * power), StrokeCap.Round)
+    drawLine(col, v.p(start), v.p(tip - dir * head), v.d(0.6 + 0.5 * power), StrokeCap.Round)
+    val arrow = Path().apply {
+        v.p(tip).let { moveTo(it.x, it.y) }
+        v.p(tip - dir * head + side * (head * 0.75)).let { lineTo(it.x, it.y) }
+        v.p(tip - dir * head - side * (head * 0.75)).let { lineTo(it.x, it.y) }
+        close()
+    }
+    drawPath(arrow, col)
+    drawPath(arrow, Color(0x88000000), style = Stroke(v.d(0.2)))
+}
+
+/** The newest feed message, shown briefly on top of the course without moving anything. */
+@Composable
+private fun FeedToast(s: MatchState, modifier: Modifier) {
+    val latest = s.feed.lastOrNull()
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(latest?.seq) {
+        if (latest == null) return@LaunchedEffect
+        visible = true
+        delay(3500)
+        visible = false
+    }
+    AnimatedVisibility(visible, modifier, enter = fadeIn(), exit = fadeOut()) {
+        Text(
+            latest?.text ?: "",
+            Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xAA000000))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable
-private fun TopBar(s: MatchState, myId: Int, myTurn: Boolean, onRules: () -> Unit, onLeave: () -> Unit) {
+private fun TopBar(s: MatchState, myTurn: Boolean, onRules: () -> Unit, onLeave: () -> Unit) {
     val current = s.player(s.currentId)
     Row(
         Modifier
             .fillMaxWidth()
+            .height(52.dp)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
                 "Hole ${s.levelIndex + 1}/${s.holeCount} · ${s.level.name}",
-                color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             val banner = when {
                 s.phase == Phase.HOLE_DONE -> "Hole finished!"
@@ -265,9 +292,11 @@ private fun Scoreboard(s: MatchState) {
     Row(
         Modifier
             .fillMaxWidth()
+            .height(48.dp)
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         s.order.mapNotNull { s.player(it) }.forEach { p -> PlayerChip(p, p.id == s.currentId) }
     }
@@ -302,36 +331,45 @@ private fun PlayerChip(p: PlayerState, active: Boolean) {
 }
 
 @Composable
-private fun BottomBar(s: MatchState, me: PlayerState?, myTurn: Boolean, selectedSlot: Int?, onSlot: (Int) -> Unit) {
-    Column(
+private fun BottomPanel(
+    s: MatchState,
+    me: PlayerState?,
+    myTurn: Boolean,
+    selectedSlot: Int?,
+    aim: Vec2?,
+    onSlot: (Int) -> Unit,
+    onAim: (Vec2?) -> Unit,
+    onShoot: (Vec2) -> Unit,
+) {
+    Row(
         Modifier
             .fillMaxWidth()
+            .height(PANEL_HEIGHT)
             .background(Color(0xFF143A1A))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // Latest happenings, newest first.
-        s.feed.takeLast(2).asReversed().forEachIndexed { i, f ->
-            Text(f.text, color = Color.White.copy(alpha = if (i == 0) 1f else 0.6f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        val hint = when {
-            selectedSlot != null -> me?.inventory?.getOrNull(selectedSlot)?.let {
-                if (it.targeting == Targeting.OPPONENT) "Tap an opponent's ball for ${it.icon} ${it.label}" else "Tap the course to place ${it.icon} ${it.label}"
+        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            val hint = when {
+                selectedSlot != null -> me?.inventory?.getOrNull(selectedSlot)?.let {
+                    if (it.targeting == Targeting.OPPONENT) "Tap an opponent's ball for ${it.icon} ${it.label}" else "Tap the course to place ${it.icon} ${it.label}"
+                }
+                aim != null -> "Power ${(aim.len() * 100).roundToInt()}% · let go to shoot, back onto the ball to cancel"
+                myTurn && s.usedPowerThisTurn -> "Power-up used. Now take your shot!"
+                myTurn -> "Pull away from the ball in the pad. The shot goes the other way."
+                else -> "Wait for your turn…"
             }
-            myTurn && s.usedPowerThisTurn -> "Power-up used. Now take your shot!"
-            myTurn && me?.inventory?.isNotEmpty() == true -> "Use a power-up first, or drag back anywhere to shoot"
-            myTurn -> "Drag back anywhere and let go to shoot"
-            else -> null
-        }
-        hint?.let { Text(it, color = Gold, fontSize = 13.sp) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                hint ?: "", Modifier.height(34.dp), color = Gold, fontSize = 12.sp, lineHeight = 15.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
             for (i in 0 until INVENTORY_SIZE) {
                 val p = me?.inventory?.getOrNull(i)
                 val usable = p != null && myTurn && !s.usedPowerThisTurn
                 Row(
                     Modifier
+                        .fillMaxWidth()
                         .weight(1f)
-                        .height(52.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(
                             when {
@@ -341,21 +379,118 @@ private fun BottomBar(s: MatchState, me: PlayerState?, myTurn: Boolean, selected
                             }
                         )
                         .clickable(enabled = usable) { onSlot(i) }
-                        .padding(horizontal = 10.dp),
+                        .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (p == null) {
                         Text("empty slot", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp)
                     } else {
-                        Text(p.icon, fontSize = 24.sp)
-                        Spacer(Modifier.width(8.dp))
+                        Text(p.icon, fontSize = 22.sp)
+                        Spacer(Modifier.width(6.dp))
                         Column {
-                            Text(p.label, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(p.label, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
                             Text(p.help, fontSize = 9.sp, maxLines = 2, lineHeight = 10.sp, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
             }
         }
+        ShotPad(
+            enabled = myTurn && selectedSlot == null && me?.ball != null,
+            ballColor = me?.let { Color(it.color) } ?: Color.White,
+            aim = aim,
+            onAim = onAim,
+            onShoot = onShoot,
+            modifier = Modifier.fillMaxHeight().aspectRatio(1f),
+        )
+    }
+}
+
+private val PANEL_HEIGHT = 172.dp
+private val PAD_BALL_R = 14.dp
+
+/**
+ * The shooting pad: a ball with room around it. Pull away from the ball like a slingshot;
+ * the farther out (up to the outer ring), the harder the shot. Releasing on the ball cancels.
+ */
+@Composable
+private fun ShotPad(
+    enabled: Boolean,
+    ballColor: Color,
+    aim: Vec2?,
+    onAim: (Vec2?) -> Unit,
+    onShoot: (Vec2) -> Unit,
+    modifier: Modifier,
+) {
+    val haptic = LocalHapticFeedback.current
+    val currentOnAim by rememberUpdatedState(onAim)
+    val currentOnShoot by rememberUpdatedState(onShoot)
+    Canvas(
+        modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0D2A12))
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                val ballR = PAD_BALL_R.toPx()
+                val maxR = size.width / 2f - 6.dp.toPx()
+                fun shotAt(pos: Offset): Vec2? {
+                    val pull = Offset(size.width / 2f, size.height / 2f) - pos
+                    val dist = pull.getDistance()
+                    if (dist < ballR * 1.2f) return null
+                    val power = (0.04f + 0.96f * (dist - ballR * 1.2f) / (maxR - ballR * 1.2f)).coerceAtMost(1f)
+                    return Vec2((pull.x / dist * power).toDouble(), (pull.y / dist * power).toDouble())
+                }
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    var shot = shotAt(down.position)
+                    var step = shot?.let { (it.len() * 10).toInt() } ?: -1
+                    currentOnAim(shot)
+                    while (true) {
+                        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        change.consume()
+                        if (!change.pressed) break
+                        shot = shotAt(change.position)
+                        val newStep = shot?.let { (it.len() * 10).toInt() } ?: -1
+                        if (newStep != step) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        step = newStep
+                        currentOnAim(shot)
+                    }
+                    currentOnAim(null)
+                    shot?.let(currentOnShoot)
+                }
+            }
+    ) {
+        val c = center
+        val ballR = PAD_BALL_R.toPx()
+        val maxR = size.width / 2f - 6.dp.toPx()
+        val alpha = if (enabled) 1f else 0.35f
+        // Power rings: inner = softest, outer = full power.
+        for (i in 1..4) {
+            val r = ballR * 1.2f + (maxR - ballR * 1.2f) * i / 4f
+            drawCircle(powerColor(i / 4f).copy(alpha = 0.35f * alpha), r, c, style = Stroke(if (i == 4) 2.dp.toPx() else 1.dp.toPx()))
+        }
+        val shot = aim
+        if (shot != null) {
+            val power = shot.len().toFloat()
+            val dir = Offset(shot.x.toFloat(), shot.y.toFloat()) / power
+            val col = powerColor(power)
+            val finger = c - dir * (ballR * 1.2f + (maxR - ballR * 1.2f) * (power - 0.04f) / 0.96f)
+            // Rubber band to the finger, short arrow the way the ball will go.
+            drawLine(Color.White.copy(alpha = 0.5f), c, finger, 2.dp.toPx(), StrokeCap.Round)
+            drawCircle(col, 6.dp.toPx(), finger)
+            val tip = c + dir * (ballR + 10.dp.toPx() + 22.dp.toPx() * power)
+            val head = 7.dp.toPx() + 5.dp.toPx() * power
+            val side = Offset(-dir.y, dir.x)
+            drawLine(col, c + dir * ballR, tip - dir * head, (3 + 2 * power).dp.toPx(), StrokeCap.Round)
+            drawPath(Path().apply {
+                moveTo(tip.x, tip.y)
+                (tip - dir * head + side * head * 0.7f).let { lineTo(it.x, it.y) }
+                (tip - dir * head - side * head * 0.7f).let { lineTo(it.x, it.y) }
+                close()
+            }, col)
+        }
+        drawCircle(Color(0x55000000), ballR, c + Offset(2.dp.toPx(), 3.dp.toPx()))
+        drawCircle(ballColor.copy(alpha = alpha), ballR, c)
+        drawCircle(Color.White.copy(alpha = alpha), ballR, c, style = Stroke(2.dp.toPx()))
     }
 }

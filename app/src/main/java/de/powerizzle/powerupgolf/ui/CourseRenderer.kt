@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -22,6 +23,8 @@ import de.powerizzle.powerupgolf.game.HazardType
 import de.powerizzle.powerupgolf.game.Level
 import de.powerizzle.powerupgolf.game.MAX_PLAYERS
 import de.powerizzle.powerupgolf.game.MatchState
+import de.powerizzle.powerupgolf.game.PORTAL_R
+import de.powerizzle.powerupgolf.game.SLIDER_HALF_WIDTH
 import de.powerizzle.powerupgolf.game.TEE_SPACING
 import de.powerizzle.powerupgolf.game.Terrain
 import de.powerizzle.powerupgolf.game.Vec2
@@ -45,6 +48,7 @@ class CourseView(val scale: Float, val ox: Float, val oy: Float) {
     }
 }
 
+private val PortalColors = listOf(Color(0xFFFF9800), Color(0xFFB388FF), Color(0xFF18FFFF))
 private val Sand = Color(0xFFE8D49A)
 private val Water = Color(0xFF3FA7D6)
 private val Ice = Color(0xFFD6F3FF)
@@ -135,6 +139,43 @@ fun DrawScope.drawCourse(
                 gy += 8
             }
         }
+        // Speed pads: orange tiles with chevrons racing towards the boost direction.
+        for (bo in level.boosters) {
+            val dir = bo.dir.norm()
+            val side = dir.perp()
+            drawRoundRect(
+                Color(0xFFFF9800), v.p(bo.c - Vec2(bo.half, bo.half)), Size(v.d(bo.half * 2), v.d(bo.half * 2)), CornerRadius(v.d(1.0)),
+            )
+            drawRoundRect(
+                Color(0xFFE65100), v.p(bo.c - Vec2(bo.half, bo.half)), Size(v.d(bo.half * 2), v.d(bo.half * 2)), CornerRadius(v.d(1.0)),
+                style = Stroke(v.d(0.4)),
+            )
+            for (i in 0 until 3) {
+                val t = ((clock * 1.5f + i / 3f) % 1f).toDouble()
+                val c = bo.c + dir * (bo.half * (t * 1.4 - 0.7))
+                val fade = Color.White.copy(alpha = (0.9 * sin(t * Math.PI)).toFloat())
+                drawLine(fade, v.p(c - dir * 1.0 + side * 1.8), v.p(c + dir * 0.6), v.d(0.6), StrokeCap.Round)
+                drawLine(fade, v.p(c - dir * 1.0 - side * 1.8), v.p(c + dir * 0.6), v.d(0.6), StrokeCap.Round)
+            }
+        }
+    }
+
+    // Portals: both ends of a pair share a colour and swirl.
+    level.portals.forEachIndexed { i, pt ->
+        val col = PortalColors[i % PortalColors.size]
+        for (end in listOf(pt.a, pt.b)) {
+            val c = v.p(end)
+            val r = v.d(PORTAL_R)
+            drawCircle(Brush.radialGradient(listOf(Color(0xFF1A0033), col.copy(alpha = 0.6f)), c, r), r, c)
+            for (k in 0 until 3) {
+                val rr = r * (0.45f + 0.25f * k)
+                drawArc(
+                    col, clock * 300f * (if (k % 2 == 0) 1 else -1) + k * 90f, 200f, false,
+                    topLeft = c - Offset(rr, rr), size = Size(rr * 2, rr * 2), style = Stroke(v.d(0.35), cap = StrokeCap.Round),
+                )
+            }
+            drawCircle(col, r, c, style = Stroke(v.d(0.6)))
+        }
     }
 
     // Tee mat
@@ -168,6 +209,39 @@ fun DrawScope.drawCourse(
             drawLine(Color(0xFFBCAAA4), v.p(wm.c), v.p(end), v.d(0.6), StrokeCap.Round)
         }
         drawCircle(Color(0xFF4E342E), v.d(2.0), v.p(wm.c))
+    }
+
+    // Jigsaw blades: a slot showing the track, and a toothed steel bar sawing along it.
+    for (sl in level.sliders) {
+        val dir = (sl.b - sl.a).norm()
+        drawLine(Color(0x44000000), v.p(sl.a - dir * sl.half), v.p(sl.b + dir * sl.half), v.d(0.8), StrokeCap.Round)
+        val (e1, e2) = sl.ends(simTime)
+        val side = dir.perp() * SLIDER_HALF_WIDTH
+        val len = sl.half * 2
+        val teeth = (len / 1.6).toInt().coerceAtLeast(2)
+        val blade = Path().apply {
+            v.p(e1 + side).let { moveTo(it.x, it.y) }
+            for (k in 0 until teeth) {
+                val t0 = e1 + dir * (len * k / teeth)
+                val t1 = e1 + dir * (len * (k + 0.5) / teeth)
+                v.p(t0 + side).let { lineTo(it.x, it.y) }
+                v.p(t1 + side * 1.6).let { lineTo(it.x, it.y) }
+            }
+            v.p(e2 + side).let { lineTo(it.x, it.y) }
+            for (k in teeth - 1 downTo 0) {
+                val t0 = e1 + dir * (len * (k + 1) / teeth)
+                val t1 = e1 + dir * (len * (k + 0.5) / teeth)
+                v.p(t0 - side).let { lineTo(it.x, it.y) }
+                v.p(t1 - side * 1.6).let { lineTo(it.x, it.y) }
+            }
+            v.p(e1 - side).let { lineTo(it.x, it.y) }
+            close()
+        }
+        translate(v.d(0.4), v.d(0.5)) { drawPath(blade, Color(0x33000000)) }
+        drawPath(blade, Color(0xFFB0BEC5))
+        drawPath(blade, Color(0xFF455A64), style = Stroke(v.d(0.3), join = StrokeJoin.Round))
+        drawLine(Color(0xFFFFC107), v.p(e1), v.p(e1 + dir * 1.2), v.d(SLIDER_HALF_WIDTH * 2), StrokeCap.Butt)
+        drawLine(Color(0xFFFFC107), v.p(e2), v.p(e2 - dir * 1.2), v.d(SLIDER_HALF_WIDTH * 2), StrokeCap.Butt)
     }
 
     // Power-up boxes

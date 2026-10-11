@@ -221,6 +221,9 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
                 level.allWalls.all { closestOnSegment(p, it.a, it.b).dist(p) > r + WALL_HALF_WIDTH + 1 } &&
                 level.bumpers.all { it.c.dist(p) > it.r + r + 1 } &&
                 level.windmills.all { it.c.dist(p) > it.length + r + 2 } &&
+                level.portals.all { it.a.dist(p) > PORTAL_R + r + 2 && it.b.dist(p) > PORTAL_R + r + 2 } &&
+                level.sliders.all { closestOnSegment(p, it.a, it.b).dist(p) > it.half + r + 2 } &&
+                level.boosters.all { it.c.dist(p) > it.half * 1.5 + r } &&
                 hazards.all { it.pos.dist(p) > it.r + r + 1 } &&
                 bodies.all { !it.onCourse || it.pos.dist(p) > it.r + r + 1 }
             if (free) return p

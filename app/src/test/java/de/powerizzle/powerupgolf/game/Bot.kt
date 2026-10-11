@@ -24,12 +24,19 @@ class Bot(private val level: Level) {
             val i = q.removeFirst()
             val cx = i % cols
             val cy = i / cols
-            for ((dx, dy) in listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)) {
+            val here = Vec2(cx * cell, cy * cell)
+            val next = listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1).mapNotNull { (dx, dy) ->
                 val nx = cx + dx
                 val ny = cy + dy
-                if (nx !in 0 until cols || ny !in 0 until rows) continue
-                val n = ny * cols + nx
-                if (dist[n] != Int.MAX_VALUE || !free(Vec2(nx * cell, ny * cell))) continue
+                if (nx !in 0 until cols || ny !in 0 until rows || !free(Vec2(nx * cell, ny * cell))) null else ny * cols + nx
+            }.toMutableList()
+            // Portals work both ways: standing in one end is as good as standing in the other.
+            for (p in level.portals) {
+                if (here.dist(p.a) < PORTAL_R) next += idx(p.b)
+                if (here.dist(p.b) < PORTAL_R) next += idx(p.a)
+            }
+            for (n in next) {
+                if (dist[n] != Int.MAX_VALUE) continue
                 dist[n] = dist[i] + 1
                 q += n
             }

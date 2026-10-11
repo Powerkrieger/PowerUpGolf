@@ -23,6 +23,7 @@ private const val MINE_TRIGGER = 1.4
 const val MINE_BLAST_R = 16.0
 private const val TORNADO_FLING_SPEED = 85.0
 private const val TORNADO_COOLDOWN = 0.8
+private const val BOOST_ACCEL = 260.0
 
 /** Rolling resistance per terrain: constant deceleration plus speed-proportional drag. */
 private class Friction(val decel: Double, val drag: Double)
@@ -43,6 +44,8 @@ class Body(val id: Int, var pos: Vec2, var r: Double = BALL_R) {
     /** Where the ball rested before the current shot; water and out-of-bounds send it back here. */
     var restPos = pos
     var slowFor = 0.0
+    /** The portal end the ball just came out of; it can't warp again until it has rolled clear of it. */
+    var portalExit: Vec2? = null
 
     fun kick(v: Vec2) {
         vel = v
@@ -78,11 +81,13 @@ class Physics(private val level: Level, private val rng: Random) {
             collideWalls(b)
             collideBumpers(b)
             collideWindmills(b, time)
+            collideSliders(b, time)
             collideBlocks(b, hazards, out)
         }
         collideBalls(live, out)
         for (b in live) {
             triggerHazards(b, live, hazards, time, out)
+            warp(b)
             if (level.terrainAt(b.pos) == Terrain.WATER || !level.inside(b.pos)) {
                 out += PhysEvent.Sunk(b.id)
                 b.pos = b.restPos
@@ -113,6 +118,7 @@ class Physics(private val level: Level, private val rng: Random) {
         val terrain = terrainWithHazards(b.pos, hazards)
         var acc = Vec2.ZERO
         for (s in level.slopes) if (pointInPolygon(b.pos, s.poly)) acc += s.force
+        for (bo in level.boosters) if (bo.contains(b.pos)) acc += bo.dir.norm() * BOOST_ACCEL
         val funnel = if (b.magnet) level.funnel * MAGNET_FUNNEL_FACTOR else level.funnel
         val toCup = level.cup - b.pos
         val d = toCup.len()
@@ -191,6 +197,29 @@ class Physics(private val level: Level, private val rng: Random) {
                     Vec2(-r.y, r.x) * wm.speed
                 }
             }
+        }
+    }
+
+    private fun collideSliders(b: Body, time: Double) {
+        for (sl in level.sliders) {
+            val (e1, e2) = sl.ends(time)
+            val v = sl.velocity(time)
+            collideSegment(b, e1, e2, SLIDER_HALF_WIDTH, 0.6) { v }
+        }
+    }
+
+    private fun warp(b: Body) {
+        b.portalExit?.let { if (b.pos.dist(it) > PORTAL_R + b.r) b.portalExit = null else return }
+        if (b.settled) return
+        for (p in level.portals) {
+            val to = when {
+                b.pos.dist(p.a) < PORTAL_R -> p.b
+                b.pos.dist(p.b) < PORTAL_R -> p.a
+                else -> continue
+            }
+            b.pos = to
+            b.portalExit = to
+            return
         }
     }
 

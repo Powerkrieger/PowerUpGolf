@@ -10,6 +10,8 @@ Party mini golf for 1–6 phones on the same Wi-Fi (or one phone's hotspot). No 
 - Roll over 🎁 boxes for power-ups (2 slots, one use per turn, before shooting): Tornado, Portal, Enlarge, Force Up,
   Ice Patch, Mine, Boulder, Earthquake, Swap, Magnet.
 - The cup sits in a funnel: slow balls nearby roll in.
+- Shoot with the pad at the bottom: pull away from the ball like a slingshot; distance from the ball = power.
+- Course features: walls, bumpers, sand, water, ice, slopes, windmills, portal pairs, sliding jigsaw blades, boost pads.
 
 ## Networking
 The host phone runs the authoritative `Match` and physics. Joiners find it via UDP broadcast (port 47411)
@@ -22,4 +24,5 @@ the host streams the full `MatchState` (~30 Hz while balls roll) and phones inte
 - `ui/` – Compose screens and the `CourseRenderer` canvas.
 
 Tests (`./gradlew :app:testDebugUnitTest`) include a brute-force bot that checks every hole can be finished
-within 5 strokes, so run them after adding levels.
+within 5 strokes, so run them after adding levels. `LevelPreview` renders every hole to
+`app/build/level-previews/` for a quick look at a layout without a phone.
