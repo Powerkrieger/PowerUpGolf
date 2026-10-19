@@ -13,6 +13,8 @@ data class PlayerState(
     val id: Int,
     val name: String,
     val color: Long,
+    /** Set for computer players. */
+    val bot: BotLevel? = null,
     val connected: Boolean = true,
     /** Total over all finished holes, bonus included. */
     val total: Int = 0,
@@ -60,7 +62,6 @@ data class MatchState(
     val currentId: Int? = null,
     val round: Int = 0,
     val secondsLeft: Int = 0,
-    val usedPowerThisTurn: Boolean = false,
     val hazards: List<HazardState> = emptyList(),
     val boxes: List<Boolean> = emptyList(),
     val simTime: Double = 0.0,

@@ -8,7 +8,7 @@ import de.powerizzle.powerlink.LinkConfig
 import java.util.UUID
 
 /** Bump when messages change incompatibly; the host turns away players with another version. */
-const val PROTOCOL_VERSION = 2
+const val PROTOCOL_VERSION = 3
 
 /** How PowerLink finds and connects PowerUp Golf phones. Never change these, old and new versions must agree. */
 val LINK_CONFIG = LinkConfig(

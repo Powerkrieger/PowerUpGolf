@@ -1,16 +1,20 @@
 # PowerUp Golf
 
 Party mini golf for 1–6 phones on the same Wi-Fi (or one phone's hotspot). No Google services.
+Play alone against bots, or fill up a multiplayer game with them.
 
 ## Rules
 - Everyone plays the same hole at once, taking turns one stroke at a time. Balls stay on the course and collide.
 - Max 5 strokes per hole. The best score on the previous hole goes first.
 - Hole in one 500, then 400/300/200/100; not holed 0.
 - Bonus: bump an opponent +25, knock one into water +50, targeted power-up +30, your tornado/mine catching someone +40.
-- Roll over 🎁 boxes for power-ups (2 slots, one use per turn, before shooting): Tornado, Portal, Enlarge, Force Up,
-  Ice Patch, Mine, Boulder, Earthquake, Swap, Magnet.
+- Roll over 🎁 boxes for power-ups (2 slots). Fire them any time balls are on the course, even on someone
+  else's turn or while balls roll. Tornado, Portal, Enlarge, Force Up,
+  Ice Patch, Mine, Boulder, Earthquake, Swap, Magnet, Countdown (whoever is aiming has 5 s left or loses the turn).
 - The cup sits in a funnel: slow balls nearby roll in.
 - Shoot with the pad at the bottom: pull away from the ball like a slingshot; distance from the ball = power.
+- The host can add 🤖 bots in the lobby: Easy, Medium or Hard. Harder bots search more shots, aim more precisely
+  and use their power-ups more often and more cleverly.
 - Course features: walls, bumpers, sand, water, ice, slopes, windmills, portal pairs, sliding jigsaw blades, boost pads.
 
 ## Networking
@@ -23,9 +27,13 @@ The host phone runs the authoritative `Match` and physics. Messages are JSON lin
 full `MatchState` (~30 Hz while balls roll) and phones interpolate.
 
 ## Code
-- `game/` – pure Kotlin, no Android: `Levels` (add holes here), `Physics`, `Match` (rules), `PowerUp`.
+- `game/` – pure Kotlin, no Android: `Levels` (add holes here), `Physics`, `Match` (rules), `PowerUp`,
+  `Bot` (simulates candidate shots) and `BotBrain` (what a computer player does, per `BotLevel`).
 - `net/` – `GameHost`, `GameClient` (on top of PowerLink `Link`s), the wire protocol.
 - `ui/` – Compose screens and the `CourseRenderer` canvas.
+
+The host drives bots: `GameHost` asks `BotBrain` for a move off the game loop and sends it in as an `Intent`,
+just like a player's phone would.
 
 Tests (`./gradlew :app:testDebugUnitTest`) include a brute-force bot that checks every hole can be finished
 within 5 strokes, so run them after adding levels. `LevelPreview` renders every hole to

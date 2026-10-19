@@ -105,9 +105,79 @@ class MatchTest {
         assertEquals(Points.SABOTAGE, m.state().player(0)!!.bonus)
         assertEquals(BALL_R * 2.1, m.state().player(1)!!.ball!!.r, 1e-9)
         assertTrue(m.state().player(0)!!.inventory.isEmpty())
-        // Still host's turn after using the power-up; a second one is not allowed.
+        // Still host's turn after using the power-up, and another one would be fine too.
         assertEquals(0, m.state().currentId)
-        assertTrue(m.state().usedPowerThisTurn)
+        m.giveForTest(0, PowerUp.FORCE_UP)
+        m.handle(Intent.UsePower(0, 0, 1, null, null), now)
+        assertTrue(m.state().player(1)!!.forceUp)
+    }
+
+    @Test
+    fun powerUpsWorkOnSomeoneElsesTurn() {
+        val m = newMatch("B")
+        assertEquals(0, m.state().currentId)
+        m.giveForTest(1, PowerUp.FORCE_UP)
+        m.handle(Intent.UsePower(1, 0, 0, null, null), now)
+        assertTrue("B strikes during the host's turn", m.state().player(0)!!.forceUp)
+        assertEquals(Points.SABOTAGE, m.state().player(1)!!.bonus)
+    }
+
+    @Test
+    fun powerUpsWorkWhileBallsRoll() {
+        val m = newMatch("B")
+        m.handle(Intent.Shoot(0, 0.0, -0.6), now)
+        assertEquals(Phase.ROLLING, m.state().phase)
+        m.giveForTest(1, PowerUp.QUAKE)
+        m.handle(Intent.UsePower(1, 0, null, null, null), now)
+        assertTrue(m.state().player(1)!!.inventory.isEmpty())
+        assertEquals("the roll in progress just continues", Phase.ROLLING, m.state().phase)
+        m.settleNow(now)
+        assertEquals("the shot still ends the host's turn", 1, m.state().currentId)
+    }
+
+    @Test
+    fun clockKeepsRunningThroughAPowerRoll() {
+        val m = newMatch("B")
+        m.tick(now)
+        now += 30_000
+        m.giveForTest(1, PowerUp.QUAKE)
+        m.handle(Intent.UsePower(1, 0, null, null, null), now)
+        assertEquals(Phase.ROLLING, m.state().phase)
+        now += 4_000
+        m.settleNow(now)
+        assertEquals(Phase.AIMING, m.state().phase)
+        assertEquals("back to the host, not to B", 0, m.state().currentId)
+        assertTrue(m.state().secondsLeft <= 6)
+    }
+
+    @Test
+    fun countdownRushesTheAimer() {
+        val m = newMatch("B")
+        m.tick(now)
+        m.giveForTest(1, PowerUp.COUNTDOWN)
+        m.giveForTest(0, PowerUp.COUNTDOWN)
+        m.handle(Intent.UsePower(0, 0, null, null, null), now)
+        assertEquals("not on your own turn", 1, m.state().player(0)!!.inventory.size)
+        m.handle(Intent.UsePower(1, 0, null, null, null), now)
+        assertEquals(COUNTDOWN_SECONDS, m.state().secondsLeft)
+        assertEquals(Points.SABOTAGE, m.state().player(1)!!.bonus)
+        now += COUNTDOWN_SECONDS * 1000L + 10
+        m.tick(now)
+        assertEquals("host lost the turn", 1, m.state().currentId)
+        assertEquals(1, m.state().player(0)!!.strokes)
+    }
+
+    @Test
+    fun noPowerUpsBetweenHoles() {
+        val m = newMatch()
+        repeat(MAX_STROKES) {
+            m.handle(Intent.Shoot(0, 1.0, 0.0), now)
+            m.settleNow(now)
+        }
+        assertEquals(Phase.HOLE_DONE, m.state().phase)
+        m.giveForTest(0, PowerUp.MAGNET)
+        m.handle(Intent.UsePower(0, 0, null, null, null), now)
+        assertEquals(1, m.state().player(0)!!.inventory.size)
     }
 
     @Test

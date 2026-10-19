@@ -10,6 +10,8 @@ sealed interface Intent {
     val playerId: Int
 
     data class Leave(override val playerId: Int) : Intent
+    data class AddBot(override val playerId: Int, val level: BotLevel) : Intent
+    data class RemoveBot(override val playerId: Int, val botId: Int) : Intent
     data class Start(override val playerId: Int) : Intent
     /** (dx, dy) is the shot direction scaled by power, length 0..1. */
     data class Shoot(override val playerId: Int, val dx: Double, val dy: Double) : Intent
@@ -26,14 +28,14 @@ const val HOLE_DONE_SECONDS = 9
 private const val MAX_ROLL_SECONDS = 20.0
 private const val MAX_STEPS_PER_TICK = 24
 private const val ENLARGE_FACTOR = 2.1
-private const val FORCE_UP_FACTOR = 1.8
+const val FORCE_UP_FACTOR = 1.8
 
 /**
  * The authoritative game. Lives on the host only and is driven from a single coroutine:
  * [handle] for player intents, [tick] for time passing. Time is passed in (ms) so tests can fake it.
  */
 class Match(hostName: String, seed: Long = System.nanoTime()) {
-    private class P(val id: Int, val name: String, val color: Long) {
+    private class P(val id: Int, val name: String, val color: Long, val bot: BotLevel? = null) {
         var connected = true
         var total = 0
         var strokes = 0
@@ -63,7 +65,6 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
     private var order = listOf<Int>()
     private var currentIdx = 0
     private var round = 0
-    private var usedPower = false
     private var deadline = 0L
     private var simTime = 0.0
     private var rollTime = 0.0
@@ -81,16 +82,19 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
     // ---- players --------------------------------------------------------------------------------
 
     /** Adds a player in the lobby. Returns the new id, or null when the game already started or is full. */
-    fun join(name: String, color: Long): Int? {
+    fun join(name: String, color: Long, bot: BotLevel? = null): Int? {
         if (phase != Phase.LOBBY || players.size >= MAX_PLAYERS) return null
         val taken = players.map { it.color }.toSet()
         val c = if (color in taken || color !in PLAYER_COLORS) PLAYER_COLORS.first { it !in taken } else color
         val clean = name.trim().take(14).ifEmpty { "Player ${nextId + 1}" }
-        val p = P(nextId++, clean, c)
+        val p = P(nextId++, clean, c, bot)
         players += p
         say("${p.name} joined")
         return p.id
     }
+
+    /** Adds a computer player in the lobby. Returns its id, or null when the game already started or is full. */
+    fun addBot(level: BotLevel): Int? = join(BotBrain.nameFor(level, players.map { it.name }), 0, level)
 
     private fun player(id: Int?) = players.firstOrNull { it.id == id }
     private fun body(id: Int?) = bodies.firstOrNull { it.id == id && it.onCourse }
@@ -100,6 +104,10 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
     fun handle(intent: Intent, now: Long) {
         when (intent) {
             is Intent.Leave -> leave(intent.playerId, now)
+            is Intent.AddBot -> if (intent.playerId == HOST_ID) addBot(intent.level)
+            is Intent.RemoveBot -> if (intent.playerId == HOST_ID && phase == Phase.LOBBY) {
+                players.removeAll { it.id == intent.botId && it.bot != null }
+            }
             is Intent.Start -> if (intent.playerId == HOST_ID && phase == Phase.LOBBY && players.isNotEmpty()) startHole(0, now)
             is Intent.Shoot -> shoot(intent, now)
             is Intent.UsePower -> usePower(intent, now)
@@ -145,9 +153,13 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         phase = Phase.ROLLING
     }
 
+    /**
+     * Anyone still in the game may fire a power-up at any moment while balls are on the course: on their
+     * own turn, on someone else's, even while balls roll. The two inventory slots are the only limit.
+     */
     private fun usePower(u: Intent.UsePower, now: Long) {
-        if (!isTurnOf(u.playerId) || usedPower) return
-        val p = player(u.playerId) ?: return
+        if (phase != Phase.AIMING && phase != Phase.ROLLING) return
+        val p = player(u.playerId)?.takeIf { it.connected } ?: return
         val power = p.inventory.getOrNull(u.slot) ?: return
         val target = player(u.targetId)
         val targetBody = body(u.targetId)
@@ -156,6 +168,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
             Targeting.OPPONENT -> target != null && target !== p && !target.done && targetBody != null
             Targeting.PLACE -> spot != null && level.inside(spot) && level.terrainAt(spot) != Terrain.WATER
             Targeting.SELF, Targeting.ALL_OPPONENTS -> true
+            Targeting.AIMER -> phase == Phase.AIMING && order.getOrNull(currentIdx) != p.id
         }
         if (!ok) return
         var roll = false
@@ -190,19 +203,21 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
                 val victims = bodies.filter { it.onCourse && it.id != p.id }
                 for (b in victims) {
                     val a = rng.nextDouble() * 2 * PI
-                    b.kick(Vec2(cos(a), sin(a)) * (35 + rng.nextDouble() * 30))
+                    b.kick(b.vel + Vec2(cos(a), sin(a)) * (35 + rng.nextDouble() * 30))
                 }
                 p.bonus += Points.SABOTAGE / 2 * victims.size
                 roll = true
             }
             PowerUp.MAGNET -> p.magnet = true
+            PowerUp.COUNTDOWN -> deadline = minOf(deadline, now + COUNTDOWN_SECONDS * 1000L)
         }
-        if (power.targeting == Targeting.OPPONENT) p.bonus += Points.SABOTAGE
+        val victim = if (power.targeting == Targeting.AIMER) player(order.getOrNull(currentIdx)) else target
+        if (power.targeting == Targeting.OPPONENT || power.targeting == Targeting.AIMER) p.bonus += Points.SABOTAGE
         p.inventory.removeAt(u.slot)
-        usedPower = true
-        val on = if (power.targeting == Targeting.OPPONENT) " on ${target!!.name}" else ""
+        val on = victim?.let { " on ${it.name}" } ?: ""
         say("${power.icon} ${p.name} used ${power.label}$on")
-        if (roll) startRoll(p.id, powered = true)
+        // Already rolling: the new pushes simply join the roll in progress.
+        if (roll && phase == Phase.AIMING) startRoll(p.id, powered = true)
     }
 
     private fun addHazard(type: HazardType, at: Vec2, r: Double, owner: Int, rounds: Int) {
@@ -260,7 +275,6 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
 
     private fun beginTurn(now: Long) {
         phase = Phase.AIMING
-        usedPower = false
         deadline = now + TURN_SECONDS * 1000L
     }
 
@@ -397,9 +411,9 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         }
         val shooter = player(shooterId)
         if (powerRoll) {
-            // Back to the same player's aiming; their turn timer keeps running.
+            // Back to whoever was aiming; their clock kept running while the balls rolled.
             phase = Phase.AIMING
-            if (shooter == null || shooter.done) advanceTurn(now)
+            if (player(order.getOrNull(currentIdx))?.done != false) advanceTurn(now)
             return
         }
         if (shooter != null && shooter.bigShots > 0 && --shooter.bigShots == 0) {
@@ -430,7 +444,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         players = players.map { p ->
             val b = body(p.id)
             PlayerState(
-                id = p.id, name = p.name, color = p.color, connected = p.connected, total = p.total,
+                id = p.id, name = p.name, color = p.color, bot = p.bot, connected = p.connected, total = p.total,
                 strokes = p.strokes, holed = p.holed, bonus = p.bonus, holeScores = p.holeScores.toList(),
                 inventory = p.inventory.toList(), bigShots = p.bigShots, forceUp = p.forceUp, magnet = p.magnet,
                 ball = b?.let { BallState(it.pos.x, it.pos.y, it.r) },
@@ -440,7 +454,6 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         currentId = if (phase == Phase.AIMING || phase == Phase.ROLLING) order.getOrNull(currentIdx) else null,
         round = round,
         secondsLeft = ((deadline - now) / 1000).toInt().coerceAtLeast(0),
-        usedPowerThisTurn = usedPower,
         hazards = hazards.map { HazardState(it.id, it.type, it.pos.x, it.pos.y, it.r, it.ownerId, it.roundsLeft) },
         boxes = boxes.toList(),
         simTime = simTime,

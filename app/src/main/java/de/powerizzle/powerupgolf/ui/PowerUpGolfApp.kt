@@ -123,8 +123,11 @@ private fun HomeScreen(vm: AppViewModel) {
         Button(onClick = vm::openJoin, enabled = vm.name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(56.dp)) {
             Text("Join a game", fontSize = 18.sp)
         }
+        Button(onClick = vm::playBots, enabled = vm.name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(56.dp)) {
+            Text("Play vs bots 🤖", fontSize = 18.sp)
+        }
         Text(
-            "Play over the same Wi-Fi, a phone's hotspot, Bluetooth or Wi-Fi Direct.",
+            "Play over the same Wi-Fi, a phone's hotspot, Bluetooth or Wi-Fi Direct, or alone against bots.",
             color = Color.White,
             textAlign = TextAlign.Center,
         )
@@ -143,10 +146,11 @@ fun RulesDialog(onDismiss: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("• Everyone plays the same hole at the same time. Take turns, one stroke each.")
                 Text("• Shoot with the pad at the bottom: pull away from the ball like a slingshot and let go. The farther out, the harder. Let go on the ball to cancel.")
+                Text("• The host can add 🤖 bots (easy, medium, hard) in the lobby, also to a game with friends.")
                 Text("• You have $MAX_STROKES strokes per hole. The best scorer of the last hole goes first.")
                 Text("• Hole in one: 500. Two strokes: 400, three: 300 … not holed: 0.")
                 Text("• Bump other balls: +25. Knock someone into the water: +50. Sabotage with power-ups: +30 or more.")
-                Text("• Roll over 🎁 boxes to collect power-ups (max 2). Use one per turn before you shoot:")
+                Text("• Roll over 🎁 boxes to collect power-ups (max 2). Fire them whenever you like, even on someone else's turn or while balls roll:")
                 PowerUp.entries.forEach { Text("   ${it.icon} ${it.label}: ${it.help}", fontSize = 13.sp) }
                 Text("• The cup sits in a dip: slow balls nearby roll in on their own.")
                 Text("• Portals come in pairs: roll into one, come out of the other at the same speed.")

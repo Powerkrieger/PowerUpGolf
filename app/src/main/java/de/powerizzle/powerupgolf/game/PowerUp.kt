@@ -2,8 +2,11 @@ package de.powerizzle.powerupgolf.game
 
 import kotlinx.serialization.Serializable
 
+/** What a ⏳ Countdown leaves the aiming player. */
+const val COUNTDOWN_SECONDS = 5
+
 /** How a power-up is aimed when it is used. */
-enum class Targeting { OPPONENT, PLACE, SELF, ALL_OPPONENTS }
+enum class Targeting { OPPONENT, PLACE, SELF, ALL_OPPONENTS, /** Whoever is aiming right now. */ AIMER }
 
 @Serializable
 enum class PowerUp(val label: String, val icon: String, val targeting: Targeting, val help: String) {
@@ -17,6 +20,7 @@ enum class PowerUp(val label: String, val icon: String, val targeting: Targeting
     QUAKE("Earthquake", "🌋", Targeting.ALL_OPPONENTS, "Shake every opponent's ball"),
     SWAP("Swap", "🔄", Targeting.OPPONENT, "Trade places with an opponent's ball"),
     MAGNET("Magnet", "🧲", Targeting.SELF, "The cup pulls your next shot in from much farther away"),
+    COUNTDOWN("Countdown", "⏳", Targeting.AIMER, "Whoever is aiming has $COUNTDOWN_SECONDS seconds left to shoot, or loses the turn"),
 }
 
 @Serializable

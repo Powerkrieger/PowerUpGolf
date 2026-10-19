@@ -61,6 +61,7 @@ import de.powerizzle.powerupgolf.game.MAX_STROKES
 import de.powerizzle.powerupgolf.game.MatchState
 import de.powerizzle.powerupgolf.game.Phase
 import de.powerizzle.powerupgolf.game.PlayerState
+import de.powerizzle.powerupgolf.game.COUNTDOWN_SECONDS
 import de.powerizzle.powerupgolf.game.Targeting
 import de.powerizzle.powerupgolf.game.Vec2
 import de.powerizzle.powerupgolf.net.Session
@@ -115,6 +116,8 @@ private class Smoother {
 fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) {
     val me = s.player(myId)
     val myTurn = s.phase == Phase.AIMING && s.currentId == myId
+    /** Power-ups work any time balls are on the course, whoever's turn it is. */
+    val canPower = (s.phase == Phase.AIMING || s.phase == Phase.ROLLING) && me?.connected == true
     var selectedSlot by remember { mutableStateOf<Int?>(null) }
     /** The shot being dialled in on the pad: direction × power (0..1), or null. */
     var aim by remember { mutableStateOf<Vec2?>(null) }
@@ -126,9 +129,11 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
     LaunchedEffect(myTurn) {
         if (myTurn) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     }
-    LaunchedEffect(myTurn, s.usedPowerThisTurn) {
-        selectedSlot = null
+    LaunchedEffect(myTurn) {
         aim = null
+    }
+    LaunchedEffect(canPower, me?.inventory) {
+        selectedSlot = null
     }
 
     // Redraw every frame for animation and smoothing.
@@ -153,9 +158,9 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(myTurn, selectedSlot) {
+                    .pointerInput(canPower, selectedSlot) {
                         val slot = selectedSlot
-                        if (!myTurn || slot == null) return@pointerInput
+                        if (!canPower || slot == null) return@pointerInput
                         detectTapGestures { off ->
                             val st = current
                             val power = st.player(myId)?.inventory?.getOrNull(slot) ?: return@detectTapGestures
@@ -191,11 +196,11 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
             }
         }
         BottomPanel(
-            s, me, myTurn, selectedSlot, aim,
+            s, me, myTurn, canPower, selectedSlot, aim,
             onSlot = { i ->
                 val power = me?.inventory?.getOrNull(i) ?: return@BottomPanel
                 when (power.targeting) {
-                    Targeting.SELF, Targeting.ALL_OPPONENTS -> session.usePower(i, null, null, null)
+                    Targeting.SELF, Targeting.ALL_OPPONENTS, Targeting.AIMER -> session.usePower(i, null, null, null)
                     else -> selectedSlot = if (selectedSlot == i) null else i
                 }
             },
@@ -278,7 +283,7 @@ private fun TopBar(s: MatchState, myTurn: Boolean, onRules: () -> Unit, onLeave:
                 else -> ""
             }
             Text(
-                banner, color = if (myTurn) Gold else Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp,
+                banner, color = if (s.phase == Phase.AIMING && s.secondsLeft <= COUNTDOWN_SECONDS) Color(0xFFFF5252) else if (myTurn) Gold else Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -335,6 +340,7 @@ private fun BottomPanel(
     s: MatchState,
     me: PlayerState?,
     myTurn: Boolean,
+    canPower: Boolean,
     selectedSlot: Int?,
     aim: Vec2?,
     onSlot: (Int) -> Unit,
@@ -355,8 +361,8 @@ private fun BottomPanel(
                     if (it.targeting == Targeting.OPPONENT) "Tap an opponent's ball for ${it.icon} ${it.label}" else "Tap the course to place ${it.icon} ${it.label}"
                 }
                 aim != null -> "Power ${(aim.len() * 100).roundToInt()}% · let go to shoot, back onto the ball to cancel"
-                myTurn && s.usedPowerThisTurn -> "Power-up used. Now take your shot!"
                 myTurn -> "Pull away from the ball in the pad. The shot goes the other way."
+                canPower && me?.inventory?.isNotEmpty() == true -> "Your power-ups work any time, even now. Strike!"
                 else -> "Wait for your turn…"
             }
             Text(
@@ -365,7 +371,7 @@ private fun BottomPanel(
             )
             for (i in 0 until INVENTORY_SIZE) {
                 val p = me?.inventory?.getOrNull(i)
-                val usable = p != null && myTurn && !s.usedPowerThisTurn
+                val usable = p != null && canPower && (p.targeting != Targeting.AIMER || (s.phase == Phase.AIMING && !myTurn))
                 Row(
                     Modifier
                         .fillMaxWidth()

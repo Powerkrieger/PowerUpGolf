@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import de.powerizzle.powerupgolf.game.BotLevel
 import de.powerizzle.powerupgolf.game.Levels
 import de.powerizzle.powerupgolf.game.MAX_PLAYERS
 import de.powerizzle.powerupgolf.game.MatchState
@@ -74,6 +75,18 @@ fun LobbyScreen(s: MatchState, session: Session, onLeave: () -> Unit, hostPanel:
                         Spacer(Modifier.width(10.dp))
                         Text(p.name, fontSize = 18.sp)
                         if (p.id == 0) Text("  (host)", color = Color.Gray)
+                        p.bot?.let { level ->
+                            Text("  ${level.label}", color = Color.Gray, modifier = Modifier.weight(1f))
+                            if (session.isHost) TextButton(onClick = { session.removeBot(p.id) }) { Text("✕") }
+                        }
+                    }
+                }
+                if (session.isHost && s.players.size < MAX_PLAYERS) {
+                    Text("Add a bot", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BotLevel.entries.forEach { level ->
+                            OutlinedButton(onClick = { session.addBot(level) }, modifier = Modifier.weight(1f)) { Text(level.label) }
+                        }
                     }
                 }
             }

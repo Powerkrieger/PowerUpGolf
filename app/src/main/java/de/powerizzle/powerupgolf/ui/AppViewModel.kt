@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import de.powerizzle.powerupgolf.game.BotLevel
 import de.powerizzle.powerupgolf.game.PLAYER_COLORS
 import de.powerizzle.powerlink.Link
 import de.powerizzle.powerlink.PowerLink
@@ -15,6 +16,7 @@ import de.powerizzle.powerupgolf.net.LINK_CONFIG
 import de.powerizzle.powerupgolf.net.GameClient
 import de.powerizzle.powerupgolf.net.GameHost
 import de.powerizzle.powerupgolf.net.Session
+import kotlinx.coroutines.flow.emptyFlow
 
 enum class Screen { HOME, JOIN, GAME }
 
@@ -53,6 +55,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val h = powerLink.host(name)
         linkHost = h
         session = GameHost(name, color, h.guests, advertise = h::update, onClose = h::close)
+        screen = Screen.GAME
+    }
+
+    /** A game on this phone only, against computer players. */
+    fun playBots() {
+        session = GameHost(name, color, emptyFlow()).also { it.addBot(BotLevel.MEDIUM) }
         screen = Screen.GAME
     }
 
