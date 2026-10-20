@@ -15,6 +15,8 @@ sealed interface Intent {
     data class Start(override val playerId: Int) : Intent
     /** (dx, dy) is the shot direction scaled by power, length 0..1. */
     data class Shoot(override val playerId: Int, val dx: Double, val dy: Double) : Intent
+    /** The shot being dialled in, shown to everyone as an arrow; null when the player lets go or cancels. */
+    data class Aim(override val playerId: Int, val dx: Double?, val dy: Double?) : Intent
     data class UsePower(override val playerId: Int, val slot: Int, val targetId: Int?, val x: Double?, val y: Double?) : Intent
 }
 
@@ -29,6 +31,8 @@ private const val MAX_ROLL_SECONDS = 20.0
 private const val MAX_STEPS_PER_TICK = 24
 private const val ENLARGE_FACTOR = 2.1
 const val FORCE_UP_FACTOR = 1.8
+/** Turns until a collected ❓ box is back: 1 = as soon as the turn it was taken in ends, so the next player can have it. */
+private const val BOX_RESPAWN_TURNS = 1
 
 /**
  * The authoritative game. Lives on the host only and is driven from a single coroutine:
@@ -46,6 +50,8 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         var bigShots = 0
         var forceUp = false
         var magnet = false
+        /** Whether the ball was put on the tee yet; that happens on the player's first turn of the hole. */
+        var teed = false
         val done get() = holed || strokes >= MAX_STROKES || !connected
     }
 
@@ -74,6 +80,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
     /** True while balls roll because of a power-up rather than a shot; the same player keeps aiming afterwards. */
     private var powerRoll = false
     private val hitThisShot = HashSet<Int>()
+    private var aim: Vec2? = null
     private val feed = ArrayDeque<FeedItem>()
     private var feedSeq = 0
 
@@ -110,6 +117,9 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
             }
             is Intent.Start -> if (intent.playerId == HOST_ID && phase == Phase.LOBBY && players.isNotEmpty()) startHole(0, now)
             is Intent.Shoot -> shoot(intent, now)
+            is Intent.Aim -> if (isTurnOf(intent.playerId)) {
+                aim = if (intent.dx != null && intent.dy != null) Vec2(intent.dx, intent.dy).let { if (it.len() > 1) it.norm() else it } else null
+            }
             is Intent.UsePower -> usePower(intent, now)
         }
     }
@@ -137,6 +147,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         val speed = power * MAX_SHOT_SPEED * (if (p.forceUp) FORCE_UP_FACTOR else 1.0)
         p.strokes++
         p.forceUp = false
+        aim = null
         b.magnet = p.magnet
         p.magnet = false
         startRoll(p.id, powered = false)
@@ -261,9 +272,10 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
             p.bigShots = 0
             p.forceUp = false
             p.magnet = false
+            p.teed = false
         }
+        // Balls come onto the tee one by one, each on its player's first turn.
         bodies.clear()
-        order.forEachIndexed { i, id -> bodies += Body(id, level.teeSpot(i, order.size)) }
         hazards.clear()
         boxes = BooleanArray(level.boxes.size) { true }
         boxRespawn = IntArray(level.boxes.size)
@@ -276,6 +288,34 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
     private fun beginTurn(now: Long) {
         phase = Phase.AIMING
         deadline = now + TURN_SECONDS * 1000L
+        shooterId = null
+        aim = null
+        val p = player(order.getOrNull(currentIdx)) ?: return
+        if (!p.teed) {
+            p.teed = true
+            tee(p.id)
+        }
+    }
+
+    /** Puts [id]'s ball on the tee; a ball lying there is nudged one ball length out of the way. */
+    private fun tee(id: Int) {
+        val spot = level.tee
+        for (b in bodies) {
+            if (!b.onCourse || b.pos.dist(spot) >= b.r + BALL_R) continue
+            val away = (b.pos - spot).norm()
+            val side = level.teeSpread.norm()
+            val dirs = listOfNotNull(away.takeIf { it != Vec2.ZERO }, side, -side, side.perp(), -side.perp()) +
+                (0 until 8).map { Vec2(cos(it * PI / 4), sin(it * PI / 4)) }
+            val gap = b.r + BALL_R + 0.2
+            val to = dirs.map { spot + it * gap }.firstOrNull { p ->
+                level.inside(p) && level.terrainAt(p) != Terrain.WATER &&
+                    level.allWalls.all { closestOnSegment(p, it.a, it.b).dist(p) > b.r + WALL_HALF_WIDTH } &&
+                    bodies.all { it === b || !it.onCourse || it.pos.dist(p) >= it.r + b.r }
+            } ?: (spot + dirs.first() * gap)
+            b.pos = to
+            b.restPos = to
+        }
+        bodies += Body(id, spot)
     }
 
     private fun advanceTurn(now: Long) {
@@ -284,6 +324,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
             val idx = (currentIdx + step) % n
             if (player(order[idx])?.done == false) {
                 if (currentIdx + step >= n) newRound()
+                for (i in boxes.indices) if (!boxes[i] && --boxRespawn[i] <= 0) boxes[i] = true
                 currentIdx = idx
                 beginTurn(now)
                 return
@@ -296,7 +337,6 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         round++
         hazards.forEach { it.roundsLeft-- }
         hazards.removeAll { it.roundsLeft <= 0 || !it.armed }
-        for (i in boxes.indices) if (!boxes[i] && --boxRespawn[i] <= 0) boxes[i] = true
     }
 
     private fun endHole(now: Long) {
@@ -308,20 +348,23 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         }
         phase = Phase.HOLE_DONE
         deadline = now + HOLE_DONE_SECONDS * 1000L
+        aim = null
     }
 
     /** Lets time pass: rolls balls, runs out turn timers, moves on after the scoreboard. */
     fun tick(now: Long) {
         val dt = if (lastTick == 0L) 0.0 else (now - lastTick) / 1000.0
         lastTick = now
-        when (phase) {
-            Phase.ROLLING -> {
-                accumulator = (accumulator + dt).coerceAtMost(MAX_STEPS_PER_TICK * DT)
-                while (accumulator >= DT && phase == Phase.ROLLING) {
-                    accumulator -= DT
-                    step(now)
-                }
+        // The course never stands still: windmills and saws keep going between shots too.
+        if (phase == Phase.ROLLING || phase == Phase.AIMING || phase == Phase.HOLE_DONE) {
+            val before = phase
+            accumulator = (accumulator + dt).coerceAtMost(MAX_STEPS_PER_TICK * DT)
+            while (accumulator >= DT && phase == before) {
+                accumulator -= DT
+                if (phase == Phase.ROLLING) step(now) else idleStep(now)
             }
+        }
+        when (phase) {
             Phase.AIMING -> if (now > deadline) {
                 val p = player(order[currentIdx])!!
                 p.strokes++
@@ -332,6 +375,24 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
                 if (levelIndex + 1 < Levels.all.size) startHole(levelIndex + 1, now) else phase = Phase.GAME_OVER
             }
             else -> {}
+        }
+    }
+
+    /**
+     * Time passing between shots. Resting balls can still be swept along by a windmill arm or a saw; whatever
+     * happens then is nobody's shot. After the hole only the obstacles matter, so events are dropped.
+     */
+    private fun idleStep(now: Long) {
+        events.clear()
+        physics.step(bodies, hazards, boxes, simTime, events)
+        simTime += DT
+        for (b in bodies) if (b.settled && b.onCourse) b.restPos = b.pos
+        if (phase != Phase.AIMING) return
+        events.forEach(::apply)
+        hazards.removeAll { !it.armed }
+        if (bodies.any { !it.onCourse }) {
+            bodies.removeAll { !it.onCourse }
+            if (player(order.getOrNull(currentIdx))?.done != false) advanceTurn(now)
         }
     }
 
@@ -386,7 +447,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
                 val got = PowerUp.entries.random(rng)
                 p.inventory += got
                 boxes[e.box] = false
-                boxRespawn[e.box] = 2
+                boxRespawn[e.box] = BOX_RESPAWN_TURNS
                 say("🎁 ${p.name} got ${got.icon} ${got.label}")
             }
             is PhysEvent.Flung -> victim(e.hazard, e.id, "🌪 tornado got")
@@ -413,6 +474,7 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         if (powerRoll) {
             // Back to whoever was aiming; their clock kept running while the balls rolled.
             phase = Phase.AIMING
+            shooterId = null
             if (player(order.getOrNull(currentIdx))?.done != false) advanceTurn(now)
             return
         }
@@ -457,6 +519,8 @@ class Match(hostName: String, seed: Long = System.nanoTime()) {
         hazards = hazards.map { HazardState(it.id, it.type, it.pos.x, it.pos.y, it.r, it.ownerId, it.roundsLeft) },
         boxes = boxes.toList(),
         simTime = simTime,
+        aim = aim?.takeIf { phase == Phase.AIMING }?.let { AimState(it.x, it.y) },
+        moving = phase == Phase.AIMING && bodies.any { it.onCourse && !it.settled },
         feed = feed.toList(),
     )
 

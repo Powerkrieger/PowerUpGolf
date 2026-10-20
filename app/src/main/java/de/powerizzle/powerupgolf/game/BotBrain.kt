@@ -39,14 +39,15 @@ class BotBrain(private val rng: Random = Random) {
 
     /**
      * The next move of player [id] in [s]: a power-up when [mayUsePower] and it wants one, otherwise a shot.
-     * Takes up to a second or so on the hardest level, so call it off the game loop.
+     * A shot is planned for simulation time [at], when it will actually be played (windmills and saws keep
+     * moving while the bot thinks). Takes up to a second or so on the hardest level, so call it off the game loop.
      */
-    fun decide(s: MatchState, id: Int, level: BotLevel, mayUsePower: Boolean): Intent {
+    fun decide(s: MatchState, id: Int, level: BotLevel, mayUsePower: Boolean, at: Double = s.simTime): Intent {
         val me = s.player(id)!!
         if (mayUsePower && me.inventory.isNotEmpty() && rng.nextDouble() < level.powerChance) {
             choosePower(s, me, level)?.let { return it }
         }
-        return shot(s, me, level)
+        return shot(s, me, level, at)
     }
 
     /**
@@ -64,7 +65,7 @@ class BotBrain(private val rng: Random = Random) {
 
     // ---- shooting -------------------------------------------------------------------------------
 
-    private fun shot(s: MatchState, me: PlayerState, level: BotLevel): Intent.Shoot {
+    private fun shot(s: MatchState, me: PlayerState, level: BotLevel, at: Double): Intent.Shoot {
         val ball = me.ball ?: return Intent.Shoot(me.id, 0.0, -0.2)
         val bot = botFor(s.levelIndex)
         val from = Vec2(ball.x, ball.y)
@@ -76,15 +77,15 @@ class BotBrain(private val rng: Random = Random) {
             magnet = me.magnet,
             radius = ball.r,
         )
-        var all = bot.candidates(from, s.simTime, world, level.angles, level.powers)
+        var all = bot.candidates(from, at, world, level.angles, level.powers)
         // Then looks closer around the most promising lines.
-        if (level == BotLevel.HARD) all = bot.refine(from, s.simTime, world, all.take(5))
+        if (level == BotLevel.HARD) all = bot.refine(from, at, world, all.take(5))
         val plan = when (level) {
             // Doesn't always see the best line: any shot nearly as good will do.
             BotLevel.EASY -> all.takeWhile { it.score <= all.first().score + 12 }.random(rng).shot
             BotLevel.MEDIUM -> all.first().shot
             // Prefers shots that still work when the aim is a bit off.
-            BotLevel.HARD -> all.take(8).minBy { robustness(bot, from, it, s.simTime, world) }.shot
+            BotLevel.HARD -> all.take(8).minBy { robustness(bot, from, it, at, world) }.shot
         }
         val angle = atan2(plan.y, plan.x) + gauss() * level.aimError
         val power = (plan.len() * (1 + gauss() * level.powerError)).coerceIn(0.05, 1.0)

@@ -88,25 +88,63 @@ class MatchTest {
     }
 
     @Test
+    fun ballsTeeOffOneAfterAnother() {
+        val m = newMatch("B")
+        val tee = Levels.all[0].tee
+        assertEquals(tee, m.ballOf(0))
+        assertNull("B's ball waits for B's turn", m.ballOf(1))
+        m.handle(Intent.Shoot(0, 0.0, 0.0), now) // host doesn't move at all
+        m.settleNow(now)
+        assertEquals(tee, m.ballOf(1))
+        assertEquals("host's ball was nudged one ball length aside", 2 * BALL_R + 0.2, m.ballOf(0)!!.dist(tee), 1e-6)
+    }
+
+    @Test
     fun hittingAnOpponentScores() {
         val m = newMatch("B")
-        // Host stands left of B on the tee; shoot straight right into B.
-        m.handle(Intent.Shoot(0, 0.5, 0.0), now)
+        // Host putts a little forward and gets nudged on along the line when B tees; B shoots straight into it.
+        m.handle(Intent.Shoot(0, 0.0, -0.05), now)
         m.settleNow(now)
-        assertEquals(Points.HIT, m.state().player(0)!!.bonus)
+        m.handle(Intent.Shoot(1, 0.0, -0.5), now)
+        m.settleNow(now)
+        assertEquals(Points.HIT, m.state().player(1)!!.bonus)
+    }
+
+    @Test
+    fun theCourseKeepsMovingBetweenShots() {
+        val m = newMatch()
+        m.tick(now)
+        val t0 = m.state().simTime
+        now += 50
+        m.tick(now)
+        assertEquals(Phase.AIMING, m.state().phase)
+        assertTrue("time runs while aiming", m.state().simTime > t0 + 0.04)
+    }
+
+    @Test
+    fun othersSeeTheAim() {
+        val m = newMatch("B")
+        m.handle(Intent.Aim(1, 0.3, 0.0), now)
+        assertNull("not B's turn", m.state().aim)
+        m.handle(Intent.Aim(0, 0.3, -0.4), now)
+        assertEquals(AimState(0.3, -0.4), m.state().aim)
+        m.handle(Intent.Shoot(0, 0.3, -0.4), now)
+        assertNull(m.state().aim)
     }
 
     @Test
     fun enlargedBallCannotDrop() {
         val m = newMatch("B")
+        m.handle(Intent.Shoot(0, 0.0, 0.0), now) // so B's ball is on the tee
+        m.settleNow(now)
         m.giveForTest(0, PowerUp.ENLARGE)
         m.handle(Intent.UsePower(0, 0, 1, null, null), now)
         m.settleNow(now)
         assertEquals(Points.SABOTAGE, m.state().player(0)!!.bonus)
         assertEquals(BALL_R * 2.1, m.state().player(1)!!.ball!!.r, 1e-9)
         assertTrue(m.state().player(0)!!.inventory.isEmpty())
-        // Still host's turn after using the power-up, and another one would be fine too.
-        assertEquals(0, m.state().currentId)
+        // Still B's turn after the power-up, and another one would be fine too.
+        assertEquals(1, m.state().currentId)
         m.giveForTest(0, PowerUp.FORCE_UP)
         m.handle(Intent.UsePower(0, 0, 1, null, null), now)
         assertTrue(m.state().player(1)!!.forceUp)
@@ -183,6 +221,8 @@ class MatchTest {
     @Test
     fun portalMovesTheVictim() {
         val m = newMatch("B")
+        m.handle(Intent.Shoot(0, 0.0, 0.0), now)
+        m.settleNow(now)
         val before = m.ballOf(1)
         m.giveForTest(0, PowerUp.PORTAL)
         m.handle(Intent.UsePower(0, 0, 1, null, null), now)
@@ -195,11 +235,11 @@ class MatchTest {
     fun mineBlastsOpponentsForPoints() {
         val m = newMatch("B")
         m.giveForTest(0, PowerUp.MINE)
-        val b = m.ballOf(1)!!
-        // Mine right in front of B; host passes, then B shoots over it.
+        val b = Levels.all[0].tee
+        // Mine right in front of the tee; host stays put (and is nudged aside), then B shoots over it.
         m.handle(Intent.UsePower(0, 0, null, b.x, b.y - 6), now)
         assertEquals(1, m.state().hazards.size)
-        m.handle(Intent.Shoot(0, 0.0, -0.05), now)
+        m.handle(Intent.Shoot(0, 0.0, 0.0), now)
         m.settleNow(now)
         m.handle(Intent.Shoot(1, 0.0, -0.4), now)
         m.settleNow(now)

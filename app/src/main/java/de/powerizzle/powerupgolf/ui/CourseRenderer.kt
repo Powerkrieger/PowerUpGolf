@@ -21,7 +21,6 @@ import de.powerizzle.powerupgolf.game.BallState
 import de.powerizzle.powerupgolf.game.CUP_R
 import de.powerizzle.powerupgolf.game.HazardType
 import de.powerizzle.powerupgolf.game.Level
-import de.powerizzle.powerupgolf.game.MAX_PLAYERS
 import de.powerizzle.powerupgolf.game.MatchState
 import de.powerizzle.powerupgolf.game.PORTAL_R
 import de.powerizzle.powerupgolf.game.SLIDER_HALF_WIDTH
@@ -179,7 +178,7 @@ fun DrawScope.drawCourse(
     }
 
     // Tee mat
-    val td = level.teeSpread.norm() * (MAX_PLAYERS * TEE_SPACING / 2)
+    val td = level.teeSpread.norm() * TEE_SPACING
     drawLine(Color(0x33FFFFFF), v.p(level.tee - td), v.p(level.tee + td), v.d(5.0), StrokeCap.Round)
 
     // The cup sits in a dip: darker towards the middle.

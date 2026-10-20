@@ -41,6 +41,8 @@ interface Session {
     fun addBot(level: BotLevel)
     fun removeBot(id: Int)
     fun shoot(dx: Double, dy: Double)
+    /** Shares the shot being dialled in (null when let go) so the others see the arrow. */
+    fun aim(dx: Double?, dy: Double?)
     fun usePower(slot: Int, targetId: Int?, x: Double?, y: Double?)
     fun close()
 }
@@ -85,6 +87,8 @@ class GameHost(
     private suspend fun gameLoop() {
         var frame = 0L
         var advertised: Pair<String, Boolean>? = null
+        var unsent = false
+        var sentPhase: Phase? = null
         while (scope.isActive) {
             val now = System.currentTimeMillis()
             match.tick(now)
@@ -92,11 +96,15 @@ class GameHost(
             driveBots(snap)
             if (snap != state.value) {
                 state.value = snap
-                // While balls roll, every second frame (~30 Hz) is plenty; phones interpolate in between.
-                if (snap.phase != Phase.ROLLING || frame % 2 == 0L) {
-                    val line = wireJson.encodeToString(HostMsg.serializer(), HostMsg.State(snap))
-                    for (c in clients.values) c.trySend(line)
-                }
+                unsent = true
+            }
+            // While the course moves, every second frame (~30 Hz) is plenty; phones interpolate in between.
+            val moving = snap.phase == Phase.ROLLING || snap.phase == Phase.AIMING || snap.phase == Phase.HOLE_DONE
+            if (unsent && (!moving || frame % 2 == 0L || snap.phase != sentPhase)) {
+                unsent = false
+                sentPhase = snap.phase
+                val line = wireJson.encodeToString(HostMsg.serializer(), HostMsg.State(snap))
+                for (c in clients.values) c.trySend(line)
             }
             val ad = "${snap.players.size}/$MAX_PLAYERS players" to (snap.phase == Phase.LOBBY && snap.players.size < MAX_PLAYERS)
             if (ad != advertised) {
@@ -111,6 +119,8 @@ class GameHost(
     /** Situation of the bot to move; a new value means it has to think again. */
     private fun botStepOf(s: MatchState): Any? {
         val p = s.player(s.currentId)?.takeIf { s.phase == Phase.AIMING && it.bot != null } ?: return null
+        // Balls being swept along: wait until they lie still again before planning.
+        if (s.moving) return null
         // Power-ups can strike at any moment; whatever changes the course makes the bot look again.
         return listOf(
             s.levelIndex, s.round, p.id, p.strokes, p.inventory, p.forceUp, p.magnet, p.bigShots,
@@ -130,12 +140,28 @@ class GameHost(
         val mayUsePower = botPowerTurn != turn
         botPowerTurn = turn
         scope.launch {
-            val started = System.currentTimeMillis()
-            val intent = brain.decide(s, p.id, level, mayUsePower)
             // Take about as long as a person would, whatever the level: a skilled bot is not a hasty one.
-            val pause = if (intent is Intent.UsePower) 1500L + (Math.random() * 1500).toLong() else 4000L + (Math.random() * 5000).toLong()
-            // Hurry when the clock runs low, e.g. after someone's ⏳ Countdown.
-            while (System.currentTimeMillis() - started < pause && (state.value?.secondsLeft ?: 0) > 2) delay(100)
+            val shotPause = 4.0 + Math.random() * 5.0
+            val intent = brain.decide(s, p.id, level, mayUsePower, at = s.simTime + shotPause)
+            val pause = if (intent is Intent.UsePower) 1.5 + Math.random() * 1.5 else shotPause
+            // The course keeps moving, so the shot waits for the simulation moment it was planned for.
+            val due = s.simTime + pause
+            // Pull back for the last second or two, like a person lining up, so everyone sees the arrow.
+            val pullFrom = due - 1.2 - Math.random()
+            while (true) {
+                val now = state.value ?: break
+                // Hurry when the clock runs low, e.g. after someone's ⏳ Countdown.
+                if (now.simTime >= due || now.secondsLeft <= 2) break
+                if (intent is Intent.Shoot && now.simTime > pullFrom) {
+                    val f = ((now.simTime - pullFrom) / (due - pullFrom) * 1.3).coerceAtMost(1.0)
+                    withContext(loop) {
+                        if (botStepOf(match.snapshot(System.currentTimeMillis())) == step) {
+                            match.handle(Intent.Aim(p.id, intent.dx * f, intent.dy * f), System.currentTimeMillis())
+                        }
+                    }
+                }
+                delay(((due - now.simTime) * 1000).toLong().coerceIn(5, 50))
+            }
             withContext(loop) {
                 if (botStepOf(match.snapshot(System.currentTimeMillis())) != step) return@withContext
                 match.handle(intent, System.currentTimeMillis())
@@ -193,6 +219,7 @@ class GameHost(
                     val msg = runCatching { wireJson.decodeFromString(ClientMsg.serializer(), line) }.getOrNull() ?: continue
                     val intent = when (msg) {
                         is ClientMsg.Shoot -> Intent.Shoot(playerId, msg.dx, msg.dy)
+                        is ClientMsg.Aim -> Intent.Aim(playerId, msg.dx, msg.dy)
                         is ClientMsg.UsePower -> Intent.UsePower(playerId, msg.slot, msg.targetId, msg.x, msg.y)
                         is ClientMsg.Hello -> null
                     } ?: continue
@@ -218,14 +245,16 @@ class GameHost(
         match.handle(intent, System.currentTimeMillis())
     }
 
+    /** Straight onto [loop], so quick successions (like aiming) arrive in order. */
     private fun local(intent: Intent) {
-        scope.launch { act(intent) }
+        scope.launch(loop) { match.handle(intent, System.currentTimeMillis()) }
     }
 
     override fun startGame() = local(Intent.Start(HOST_ID))
     override fun addBot(level: BotLevel) = local(Intent.AddBot(HOST_ID, level))
     override fun removeBot(id: Int) = local(Intent.RemoveBot(HOST_ID, id))
     override fun shoot(dx: Double, dy: Double) = local(Intent.Shoot(HOST_ID, dx, dy))
+    override fun aim(dx: Double?, dy: Double?) = local(Intent.Aim(HOST_ID, dx, dy))
     override fun usePower(slot: Int, targetId: Int?, x: Double?, y: Double?) = local(Intent.UsePower(HOST_ID, slot, targetId, x, y))
 
     override fun close() {
@@ -243,6 +272,8 @@ class GameClient(private val link: Link, name: String, color: Long) : Session {
     override val myId = MutableStateFlow(-1)
     override val state = MutableStateFlow<MatchState?>(null)
     override val problem = MutableStateFlow<String?>(null)
+    /** One writer, so messages leave in the order they were made (an aim must never overtake its shot). */
+    private val outbox = Channel<ClientMsg>(Channel.UNLIMITED)
 
     init {
         scope.launch {
@@ -250,6 +281,9 @@ class GameClient(private val link: Link, name: String, color: Long) : Session {
                 if (!link.send(wireJson.encodeToString(ClientMsg.serializer(), ClientMsg.Hello(name, color, PROTOCOL_VERSION)))) {
                     problem.value = "Connection lost."
                     return@launch
+                }
+                launch {
+                    for (msg in outbox) if (!link.send(wireJson.encodeToString(ClientMsg.serializer(), msg))) break
                 }
                 while (true) {
                     val line = link.receive() ?: break
@@ -271,13 +305,14 @@ class GameClient(private val link: Link, name: String, color: Long) : Session {
     }
 
     private fun send(msg: ClientMsg) {
-        scope.launch { link.send(wireJson.encodeToString(ClientMsg.serializer(), msg)) }
+        outbox.trySend(msg)
     }
 
     override fun startGame() {}
     override fun addBot(level: BotLevel) {}
     override fun removeBot(id: Int) {}
     override fun shoot(dx: Double, dy: Double) = send(ClientMsg.Shoot(dx, dy))
+    override fun aim(dx: Double?, dy: Double?) = send(ClientMsg.Aim(dx, dy))
     override fun usePower(slot: Int, targetId: Int?, x: Double?, y: Double?) = send(ClientMsg.UsePower(slot, targetId, x, y))
 
     override fun close() {

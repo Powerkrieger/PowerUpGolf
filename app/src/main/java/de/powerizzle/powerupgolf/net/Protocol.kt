@@ -8,7 +8,7 @@ import de.powerizzle.powerlink.LinkConfig
 import java.util.UUID
 
 /** Bump when messages change incompatibly; the host turns away players with another version. */
-const val PROTOCOL_VERSION = 3
+const val PROTOCOL_VERSION = 4
 
 /** How PowerLink finds and connects PowerUp Golf phones. Never change these, old and new versions must agree. */
 val LINK_CONFIG = LinkConfig(
@@ -26,6 +26,10 @@ sealed interface ClientMsg {
 
     @Serializable @SerialName("shoot")
     data class Shoot(val dx: Double, val dy: Double) : ClientMsg
+
+    /** The shot being dialled in; both null when the finger lets go. */
+    @Serializable @SerialName("aim")
+    data class Aim(val dx: Double? = null, val dy: Double? = null) : ClientMsg
 
     @Serializable @SerialName("power")
     data class UsePower(val slot: Int, val targetId: Int? = null, val x: Double? = null, val y: Double? = null) : ClientMsg

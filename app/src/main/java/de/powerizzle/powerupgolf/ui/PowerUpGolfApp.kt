@@ -145,6 +145,7 @@ fun RulesDialog(onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("• Everyone plays the same hole at the same time. Take turns, one stroke each.")
+                Text("• All balls tee off from the same spot, one after another. A ball still lying there gets nudged aside.")
                 Text("• Shoot with the pad at the bottom: pull away from the ball like a slingshot and let go. The farther out, the harder. Let go on the ball to cancel.")
                 Text("• The host can add 🤖 bots (easy, medium, hard) in the lobby, also to a game with friends.")
                 Text("• You have $MAX_STROKES strokes per hole. The best scorer of the last hole goes first.")
@@ -154,7 +155,7 @@ fun RulesDialog(onDismiss: () -> Unit) {
                 PowerUp.entries.forEach { Text("   ${it.icon} ${it.label}: ${it.help}", fontSize = 13.sp) }
                 Text("• The cup sits in a dip: slow balls nearby roll in on their own.")
                 Text("• Portals come in pairs: roll into one, come out of the other at the same speed.")
-                Text("• Saw blades slide back and forth, orange pads speed you up in the arrow's direction.")
+                Text("• Windmills and saw blades never stop, not even between shots. Saw blades slide back and forth, orange pads speed you up in the arrow's direction.")
             }
         },
     )

@@ -123,6 +123,8 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
     var aim by remember { mutableStateOf<Vec2?>(null) }
     var showRules by remember { mutableStateOf(false) }
     val smoother = remember { Smoother() }
+    /** The last aim shared with the others. */
+    val sentAim = remember { arrayOfNulls<Vec2>(1) }
     smoother.push(s, System.nanoTime())
 
     val haptic = LocalHapticFeedback.current
@@ -186,9 +188,10 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
                 val now = System.nanoTime()
                 val balls = smoother.balls(now)
                 drawCourse(v, s, balls, smoother.simTime(now), (now / 1_000_000L % 1_000_000L) / 1000f, tm)
-                val shot = aim
-                val myBall = balls[myId]
-                if (shot != null && myBall != null && myTurn) drawAimArrow(v, myBall, shot)
+                // Our own arrow follows the finger without lag; everyone else's comes from the host.
+                val shot = if (myTurn) aim else s.aim?.let { Vec2(it.dx, it.dy) }
+                val aimer = balls[s.currentId]
+                if (shot != null && aimer != null && s.phase == Phase.AIMING) drawAimArrow(v, aimer, shot)
             }
             FeedToast(s, Modifier.align(Alignment.TopCenter).padding(top = 6.dp, start = 12.dp, end = 12.dp))
             if (s.phase == Phase.HOLE_DONE) {
@@ -204,7 +207,15 @@ fun GameScreen(s: MatchState, myId: Int, session: Session, onLeave: () -> Unit) 
                     else -> selectedSlot = if (selectedSlot == i) null else i
                 }
             },
-            onAim = { aim = it },
+            onAim = {
+                aim = it
+                // Two decimals are plenty for the others' arrow and spare the network most finger jitter.
+                val q = it?.let { a -> Vec2((a.x * 100).roundToInt() / 100.0, (a.y * 100).roundToInt() / 100.0) }
+                if (q != sentAim[0]) {
+                    sentAim[0] = q
+                    session.aim(q?.x, q?.y)
+                }
+            },
             onShoot = { session.shoot(it.x, it.y) },
         )
     }

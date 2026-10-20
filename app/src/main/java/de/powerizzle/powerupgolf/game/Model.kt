@@ -46,6 +46,10 @@ data class HazardState(
     val roundsLeft: Int,
 )
 
+/** The shot the aiming player is dialling in: direction × power (0..1). */
+@Serializable
+data class AimState(val dx: Double, val dy: Double)
+
 @Serializable
 data class FeedItem(val seq: Int, val text: String)
 
@@ -65,6 +69,10 @@ data class MatchState(
     val hazards: List<HazardState> = emptyList(),
     val boxes: List<Boolean> = emptyList(),
     val simTime: Double = 0.0,
+    /** What the aiming player is pulling back right now, for everyone to see. */
+    val aim: AimState? = null,
+    /** True while something sweeps resting balls along between shots; they settle again on their own. */
+    val moving: Boolean = false,
     val feed: List<FeedItem> = emptyList(),
 ) {
     fun player(id: Int?) = players.firstOrNull { it.id == id }
