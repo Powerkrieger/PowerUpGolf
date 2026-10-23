@@ -41,3 +41,7 @@ just like a player's phone would.
 Tests (`./gradlew :app:testDebugUnitTest`) include a brute-force bot that checks every hole can be finished
 within 5 strokes, so run them after adding levels. `LevelPreview` renders every hole to
 `app/build/level-previews/` for a quick look at a layout without a phone.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
